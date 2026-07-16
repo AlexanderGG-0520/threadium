@@ -65,8 +65,8 @@ abstract class FeatureRenderDispatcherMixin {
         StagedVertexMetrics.recordFeature(threadium$featurePreparationStart);
     }
     /**
-     * 26.2 bytecode offset 24: the sole drainPhases invocation, immediately after profiler "sort"
-     * and before every renderer.beginPrepare call. Critical: failure must abort Mixin application.
+     * 26.2 bytecode offset 24: the sole drainPhases invocation, immediately after profiler "sort" and before every
+     * renderer.beginPrepare call. Critical: failure must abort Mixin application.
      */
     @Redirect(
             method =
@@ -84,8 +84,8 @@ abstract class FeatureRenderDispatcherMixin {
     }
 
     /**
-     * 26.2 synthetic consumer bytecode offset 10: the sole FeatureRenderPhase.sortInto invocation.
-     * The original phase still constructs vanilla PhaseSubmitGrouper; Threadium only replays ordering.
+     * 26.2 synthetic consumer bytecode offset 10: the sole FeatureRenderPhase.sortInto invocation. The original phase
+     * still constructs vanilla PhaseSubmitGrouper; Threadium only replays ordering.
      */
     @Redirect(
             method =
