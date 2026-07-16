@@ -1,0 +1,8 @@
+package dev.alex.threadium.benchmark;
+
+public final class BenchmarkPopulationSnapshot {
+    private BenchmarkPopulationSnapshot(){}
+    public record Server(int ownedEntities,int ownedCows,int correctlyPlacedCows,int unexpectedOwnedEntities,int missingExpectedPositions,int duplicateExpectedPositions){public boolean valid(int expected){return ownedEntities==expected&&ownedCows==expected&&correctlyPlacedCows==expected&&unexpectedOwnedEntities==0&&missingExpectedPositions==0&&duplicateExpectedPositions==0;}public String describe(int expected){return "owned="+ownedEntities+", cows="+ownedCows+", correctlyPlaced="+correctlyPlacedCows+", unexpectedOwned="+unexpectedOwnedEntities+", missing="+missingExpectedPositions+", duplicates="+duplicateExpectedPositions+", expected="+expected;}}
+    public record Client(int trackedCowsInSceneBounds,int cowsMatchingExpectedPositions,int unexpectedEntitiesInSceneBounds){public boolean valid(int expected){return trackedCowsInSceneBounds==expected&&cowsMatchingExpectedPositions==expected&&unexpectedEntitiesInSceneBounds==0;}public String describe(int expected){return "trackedCows="+trackedCowsInSceneBounds+", matchingExpectedPositions="+cowsMatchingExpectedPositions+", unexpectedInBounds="+unexpectedEntitiesInSceneBounds+", expected="+expected;}}
+    public record Combined(Server server,Client client){public boolean valid(int expected){return server.valid(expected)&&client.valid(expected);}public String rejection(int expected){if(!server.valid(expected))return "Server benchmark population invalid: "+server.describe(expected);if(!client.valid(expected))return "Client benchmark population not fully tracked: "+client.describe(expected);return null;}}
+}

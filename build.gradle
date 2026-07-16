@@ -1,0 +1,100 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version "${loom_version}"
+    id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+def expandedModVersion = project.version
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://maven.fabricmc.net/' }
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'Modrinth'
+                url = 'https://api.modrinth.com/maven'
+            }
+        }
+        filter { includeGroup 'maven.modrinth' }
+    }
+}
+
+loom {
+    splitEnvironmentSourceSets()
+    mods {
+        threadium {
+            sourceSet sourceSets.main
+            sourceSet sourceSets.client
+        }
+    }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.fabric_loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    if (providers.gradleProperty('threadium.sodium').isPresent()) {
+        runtimeOnly 'maven.modrinth:AANobbMI:2Yom1N68'
+    }
+    testImplementation platform('org.junit:junit-bom:5.13.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+    withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(ProcessResources).configureEach {
+    inputs.property 'version', expandedModVersion
+    filesMatching('fabric.mod.json') {
+        expand 'version': expandedModVersion
+    }
+}
+
+// Loom includes the main resource output for the shared main/client mod source set.
+// With no main resources Gradle skips processResources, so create only its declared output directory.
+def mainResourcesDirectory = layout.buildDirectory.dir('resources/main')
+def ensureMainResourcesDirectory = tasks.register('ensureMainResourcesDirectory') {
+    outputs.dir(mainResourcesDirectory)
+    doLast {
+        mainResourcesDirectory.get().asFile.mkdirs()
+    }
+}
+
+tasks.matching { it.name == 'configureClientLaunch' }.configureEach {
+    dependsOn(ensureMainResourcesDirectory)
+}
+
+tasks.matching { it.name == 'compileClientJava' }.configureEach {
+    dependsOn(ensureMainResourcesDirectory)
+}
+
+tasks.named('runClient').configure {
+    def benchmarkMode = providers.gradleProperty('threadiumBenchmarkMode')
+    if (benchmarkMode.isPresent()) {
+        jvmArgs "-Dthreadium.benchmark.mode=${benchmarkMode.get()}"
+        ['scene', 'trial', 'setupSeconds', 'warmupSeconds', 'measurementSeconds', 'maxSamples', 'bootstrap', 'autoExit'].each { key ->
+            def property = providers.gradleProperty("threadiumBenchmark${key.capitalize()}")
+            if (property.isPresent()) jvmArgs "-Dthreadium.benchmark.${key}=${property.get()}"
+        }
+    }
+}

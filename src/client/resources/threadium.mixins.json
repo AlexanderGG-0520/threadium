@@ -1,0 +1,25 @@
+{
+  "required": true,
+  "package": "dev.alex.threadium.mixin",
+  "compatibilityLevel": "JAVA_25",
+	"client": [
+		"GameRendererMixin",
+    "accessor.TranslucentFeatureRenderPhaseAccessor",
+    "accessor.StagedVertexBufferAccessor",
+    "accessor.StagedDrawAccessor",
+    "accessor.ModelPartAccessor",
+    "ModelFeatureRendererMixin",
+    "RenderTypeFeatureRendererMixin",
+    "FeatureRenderDispatcherMixin",
+    "PreparedGroupMetricsMixin",
+    "StagedVertexBufferMetricsMixin",
+    "TextDisplayRendererMixin",
+    "TextFeatureRendererMixin",
+    "LevelExtractorMixin",
+    "LevelRendererMixin",
+    "ParticleEngineMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
