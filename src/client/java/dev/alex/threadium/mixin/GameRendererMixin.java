@@ -9,7 +9,9 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Final main-target diagnostic hook: after world, post effects and GUI, before Minecraft blits to the window surface. */
+/**
+ * Final main-target diagnostic hook: after world, post effects and GUI, before Minecraft blits to the window surface.
+ */
 @Mixin(GameRenderer.class)
 abstract class GameRendererMixin {
     @Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("HEAD"), require = 1)
