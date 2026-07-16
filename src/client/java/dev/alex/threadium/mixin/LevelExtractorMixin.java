@@ -10,8 +10,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Timings only. The three exact private methods are stable Phase 0 boundaries:
- * they own enumeration/extraction and do not change rendering control flow.
+ * Timings only. The three exact private methods are stable Phase 0 boundaries: they own enumeration/extraction and do
+ * not change rendering control flow.
  */
 @Mixin(LevelExtractor.class)
 abstract class LevelExtractorMixin {
