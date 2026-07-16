@@ -10,7 +10,9 @@ public final class PipelineValidityTable<T> {
         for (T pipeline : pipelines) values.put(pipeline, PipelineValidity.uninitialized(generation));
     }
 
-    public void put(T pipeline, PipelineValidity validity) { values.put(pipeline, validity); }
+    public void put(T pipeline, PipelineValidity validity) {
+        values.put(pipeline, validity);
+    }
 
     public PipelineValidity get(T pipeline, long generation) {
         PipelineValidity validity = values.get(pipeline);
@@ -18,6 +20,7 @@ public final class PipelineValidityTable<T> {
     }
 
     public void markStale(long nextGeneration) {
-        values.replaceAll((pipeline, validity) -> new PipelineValidity(PipelineValidityState.STALE, nextGeneration, "resource generation changed"));
+        values.replaceAll((pipeline, validity) ->
+                new PipelineValidity(PipelineValidityState.STALE, nextGeneration, "resource generation changed"));
     }
 }

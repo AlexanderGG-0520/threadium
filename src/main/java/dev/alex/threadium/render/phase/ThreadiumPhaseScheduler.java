@@ -21,8 +21,14 @@ public final class ThreadiumPhaseScheduler {
             thread.setDaemon(true);
             return thread;
         };
-        executor = new ThreadPoolExecutor(boundedWorkers, boundedWorkers, 30L, TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(queueCapacity), factory, new ThreadPoolExecutor.AbortPolicy());
+        executor = new ThreadPoolExecutor(
+                boundedWorkers,
+                boundedWorkers,
+                30L,
+                TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(queueCapacity),
+                factory,
+                new ThreadPoolExecutor.AbortPolicy());
         executor.allowCoreThreadTimeOut(true);
     }
 
@@ -36,13 +42,22 @@ public final class ThreadiumPhaseScheduler {
         }
     }
 
-    public int queueDepth() { return executor.getQueue().size(); }
-    public int activeWorkers() { return executor.getActiveCount(); }
+    public int queueDepth() {
+        return executor.getQueue().size();
+    }
+
+    public int activeWorkers() {
+        return executor.getActiveCount();
+    }
+
     public void shutdown() {
         if (!shutdown.compareAndSet(false, true)) return;
         for (Runnable queued : executor.shutdownNow()) {
             if (queued instanceof PhaseTask<?, ?> task) task.cancel();
         }
     }
-    public boolean isShutdown() { return shutdown.get(); }
+
+    public boolean isShutdown() {
+        return shutdown.get();
+    }
 }

@@ -1,11 +1,12 @@
 package dev.alex.threadium.render.phase;
 
-import org.junit.jupiter.api.Test;
-
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.junit.jupiter.api.Test;
+
 class DetachedTranslucentSnapshotTest {
-    @Test void originalArraysCannotChangeSnapshot() {
+    @Test
+    void originalArraysCannotChangeSnapshot() {
         Object first = new Object();
         Object second = new Object();
         Object[] references = {first, second};
@@ -17,6 +18,6 @@ class DetachedTranslucentSnapshotTest {
 
         assertSame(first, snapshot.opaqueReference(0));
         assertEquals(1.0f, snapshot.distance(0));
-        assertArrayEquals(new int[]{1, 0}, snapshot.sortedIndices());
+        assertArrayEquals(new int[] {1, 0}, snapshot.sortedIndices());
     }
 }

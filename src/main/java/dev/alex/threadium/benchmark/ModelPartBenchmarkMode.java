@@ -4,7 +4,9 @@ import java.util.Locale;
 import java.util.Optional;
 
 public enum ModelPartBenchmarkMode {
-    VANILLA(false, false), SINGLETON(true, false), BATCHING(true, true);
+    VANILLA(false, false),
+    SINGLETON(true, false),
+    BATCHING(true, true);
 
     private final boolean replacementEnabled;
     private final boolean consolidationEnabled;
@@ -14,8 +16,13 @@ public enum ModelPartBenchmarkMode {
         this.consolidationEnabled = consolidationEnabled;
     }
 
-    public boolean replacementEnabled() { return replacementEnabled; }
-    public boolean consolidationEnabled() { return consolidationEnabled; }
+    public boolean replacementEnabled() {
+        return replacementEnabled;
+    }
+
+    public boolean consolidationEnabled() {
+        return consolidationEnabled;
+    }
 
     public static Optional<ModelPartBenchmarkMode> parseOptional(String value) {
         if (value == null || value.isBlank()) return Optional.empty();

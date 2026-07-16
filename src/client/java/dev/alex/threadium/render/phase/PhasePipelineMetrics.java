@@ -1,7 +1,6 @@
 package dev.alex.threadium.render.phase;
 
 import dev.alex.threadium.metrics.TimingAccumulator;
-
 import java.util.concurrent.atomic.AtomicLong;
 
 final class PhasePipelineMetrics {

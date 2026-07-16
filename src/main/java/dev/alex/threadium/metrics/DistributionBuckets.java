@@ -10,7 +10,8 @@ public final class DistributionBuckets {
     public DistributionBuckets(long... upperBounds) {
         this.upperBounds = upperBounds.clone();
         for (int index = 1; index < this.upperBounds.length; index++) {
-            if (this.upperBounds[index] <= this.upperBounds[index - 1]) throw new IllegalArgumentException("bounds must increase");
+            if (this.upperBounds[index] <= this.upperBounds[index - 1])
+                throw new IllegalArgumentException("bounds must increase");
         }
         this.counts = new AtomicLongArray(upperBounds.length + 1);
     }

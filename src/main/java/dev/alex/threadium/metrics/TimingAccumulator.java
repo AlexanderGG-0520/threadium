@@ -31,16 +31,20 @@ public final class TimingAccumulator {
         do {
             current = value.get();
             if (current == Long.MAX_VALUE) return;
-        } while (!value.compareAndSet(current, current > Long.MAX_VALUE - increment ? Long.MAX_VALUE : current + increment));
+        } while (!value.compareAndSet(
+                current, current > Long.MAX_VALUE - increment ? Long.MAX_VALUE : current + increment));
     }
 
     public record Sample(long count, long totalNanos, long minNanos, long maxNanos) {
-        public long averageNanos() { return count == 0L ? 0L : totalNanos / count; }
+        public long averageNanos() {
+            return count == 0L ? 0L : totalNanos / count;
+        }
+
         public String describe() {
             return count == 0L
                     ? "count=0,totalNanos=0,minNanos=0,maxNanos=0"
-                    : "count=" + count + ",totalNanos=" + totalNanos + ",averageNanos=" + averageNanos()
-                    + ",minNanos=" + minNanos + ",maxNanos=" + maxNanos;
+                    : "count=" + count + ",totalNanos=" + totalNanos + ",averageNanos=" + averageNanos() + ",minNanos="
+                            + minNanos + ",maxNanos=" + maxNanos;
         }
     }
 }

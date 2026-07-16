@@ -1,8 +1,6 @@
 package dev.alex.threadium.config;
 
 import dev.alex.threadium.ThreadiumClient;
-import net.fabricmc.loader.api.FabricLoader;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -10,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Properties;
+import net.fabricmc.loader.api.FabricLoader;
 
 /** Small, dependency-free configuration. Unknown keys are preserved on disk. */
 public record ThreadiumConfig(
@@ -41,18 +40,73 @@ public record ThreadiumConfig(
         boolean gpuBatchConsolidation,
         String gpuDebugVisualMode,
         boolean gpuDebugSuppressVanilla,
-        int metricsOutputIntervalSeconds
-) {
+        int metricsOutputIntervalSeconds) {
     private static final String FILE_NAME = "threadium.properties";
 
     public static ThreadiumConfig defaults() {
-        return new ThreadiumConfig(true, true, false, false, true, 0, 256, 32, 500, 128, 3,
-                true, 512, 64L * 1024L * 1024L, 60,
-                false, "auto", 8192, 128, 131072, 262144, 393216, 512, 268435456L, true, true, "off", false, 30);
+        return new ThreadiumConfig(
+                true,
+                true,
+                false,
+                false,
+                true,
+                0,
+                256,
+                32,
+                500,
+                128,
+                3,
+                true,
+                512,
+                64L * 1024L * 1024L,
+                60,
+                false,
+                "auto",
+                8192,
+                128,
+                131072,
+                262144,
+                393216,
+                512,
+                268435456L,
+                true,
+                true,
+                "off",
+                false,
+                30);
     }
 
     public ThreadiumConfig forBenchmark(dev.alex.threadium.benchmark.ModelPartBenchmarkMode mode) {
-        return new ThreadiumConfig(enabled,true,debugLogging,parallelVisibilityEnabled,phasePipelineEnabled,workerCountOverride,visibilityEntityThreshold,phaseQueueCapacity,phaseDeadlineMicros,minTranslucentSubmits,maxConsecutiveFailures,retainedTextEnabled,retainedTextMaxCacheEntries,retainedTextMaxGpuBytes,retainedTextEntryIdleSeconds,mode.replacementEnabled(),gpuBackend,gpuMaxInstances,gpuMaxBonesPerModel,gpuMaxBonesPerFrame,gpuMaxVerticesPerMesh,gpuMaxIndicesPerMesh,gpuMaxCachedMeshes,gpuMaxMeshBytes,gpuAllowVanillaFallback,mode.consolidationEnabled(),"normal",true,metricsOutputIntervalSeconds);
+        return new ThreadiumConfig(
+                enabled,
+                true,
+                debugLogging,
+                parallelVisibilityEnabled,
+                phasePipelineEnabled,
+                workerCountOverride,
+                visibilityEntityThreshold,
+                phaseQueueCapacity,
+                phaseDeadlineMicros,
+                minTranslucentSubmits,
+                maxConsecutiveFailures,
+                retainedTextEnabled,
+                retainedTextMaxCacheEntries,
+                retainedTextMaxGpuBytes,
+                retainedTextEntryIdleSeconds,
+                mode.replacementEnabled(),
+                gpuBackend,
+                gpuMaxInstances,
+                gpuMaxBonesPerModel,
+                gpuMaxBonesPerFrame,
+                gpuMaxVerticesPerMesh,
+                gpuMaxIndicesPerMesh,
+                gpuMaxCachedMeshes,
+                gpuMaxMeshBytes,
+                gpuAllowVanillaFallback,
+                mode.consolidationEnabled(),
+                "normal",
+                true,
+                metricsOutputIntervalSeconds);
     }
 
     public static ThreadiumConfig load() {
@@ -76,17 +130,45 @@ public record ThreadiumConfig(
                     booleanValue(properties, "parallel.visibility.enabled", defaults.parallelVisibilityEnabled),
                     booleanValue(properties, "phase.pipeline.enabled", defaults.phasePipelineEnabled),
                     boundedInt(properties, "workers.override", defaults.workerCountOverride, 0, 4),
-                    boundedInt(properties, "visibility.entity.threshold", defaults.visibilityEntityThreshold, 1, 100_000),
+                    boundedInt(
+                            properties, "visibility.entity.threshold", defaults.visibilityEntityThreshold, 1, 100_000),
                     boundedInt(properties, "phase.queue.capacity", defaults.phaseQueueCapacity, 1, 1_024),
                     boundedInt(properties, "phase.deadline.micros", defaults.phaseDeadlineMicros, 0, 10_000),
-                    boundedInt(properties, "phase.translucent.minimum.submits", defaults.minTranslucentSubmits, 2, 1_000_000),
+                    boundedInt(
+                            properties,
+                            "phase.translucent.minimum.submits",
+                            defaults.minTranslucentSubmits,
+                            2,
+                            1_000_000),
                     boundedInt(properties, "phase.failures.maximum", defaults.maxConsecutiveFailures, 1, 100),
                     booleanValue(properties, "display.text.retained.enabled", defaults.retainedTextEnabled),
-                    boundedInt(properties, "display.text.retained.maxCacheEntries", defaults.retainedTextMaxCacheEntries, 1, 16_384),
-                    boundedLong(properties, "display.text.retained.maxGpuBytes", defaults.retainedTextMaxGpuBytes, 0L, 1L << 32),
-                    boundedInt(properties, "display.text.retained.entryIdleSeconds", defaults.retainedTextEntryIdleSeconds, 1, 86_400),
+                    boundedInt(
+                            properties,
+                            "display.text.retained.maxCacheEntries",
+                            defaults.retainedTextMaxCacheEntries,
+                            1,
+                            16_384),
+                    boundedLong(
+                            properties,
+                            "display.text.retained.maxGpuBytes",
+                            defaults.retainedTextMaxGpuBytes,
+                            0L,
+                            1L << 32),
+                    boundedInt(
+                            properties,
+                            "display.text.retained.entryIdleSeconds",
+                            defaults.retainedTextEntryIdleSeconds,
+                            1,
+                            86_400),
                     booleanValue(properties, "entity.gpu.enabled", defaults.gpuEntityEnabled),
-                    stringValue(properties, "entity.gpu.backend", defaults.gpuBackend, "auto", "opengl45", "opengl33", "disabled"),
+                    stringValue(
+                            properties,
+                            "entity.gpu.backend",
+                            defaults.gpuBackend,
+                            "auto",
+                            "opengl45",
+                            "opengl33",
+                            "disabled"),
                     boundedInt(properties, "entity.gpu.maxInstances", defaults.gpuMaxInstances, 1, 65536),
                     boundedInt(properties, "entity.gpu.maxBonesPerModel", defaults.gpuMaxBonesPerModel, 1, 1024),
                     boundedInt(properties, "entity.gpu.maxBonesPerFrame", defaults.gpuMaxBonesPerFrame, 1, 1048576),
@@ -96,10 +178,28 @@ public record ThreadiumConfig(
                     boundedLong(properties, "entity.gpu.maxMeshBytes", defaults.gpuMaxMeshBytes, 1048576L, 1L << 34),
                     booleanValue(properties, "entity.gpu.allowVanillaFallback", defaults.gpuAllowVanillaFallback),
                     booleanValue(properties, "entity.gpu.batchConsolidation", defaults.gpuBatchConsolidation),
-                    stringValue(properties, "entity.gpu.debugVisualMode", defaults.gpuDebugVisualMode, "off","screen_triangle","screen_triangle_main_target","mesh_clip_space","mesh_magenta","mesh_no_depth","mesh_no_cull","mesh_identity_bone","mesh_identity_root","mesh_projection_only","normal"),
+                    stringValue(
+                            properties,
+                            "entity.gpu.debugVisualMode",
+                            defaults.gpuDebugVisualMode,
+                            "off",
+                            "screen_triangle",
+                            "screen_triangle_main_target",
+                            "mesh_clip_space",
+                            "mesh_magenta",
+                            "mesh_no_depth",
+                            "mesh_no_cull",
+                            "mesh_identity_bone",
+                            "mesh_identity_root",
+                            "mesh_projection_only",
+                            "normal"),
                     booleanValue(properties, "entity.gpu.debugSuppressVanilla", defaults.gpuDebugSuppressVanilla),
-                    boundedInt(properties, "metrics.output.interval.seconds", defaults.metricsOutputIntervalSeconds, 5, 3_600)
-            );
+                    boundedInt(
+                            properties,
+                            "metrics.output.interval.seconds",
+                            defaults.metricsOutputIntervalSeconds,
+                            5,
+                            3_600));
             if (!Files.exists(path)) {
                 writeDefaults(path, config);
             }
@@ -112,18 +212,21 @@ public record ThreadiumConfig(
 
     private static boolean booleanValue(Properties properties, String key, boolean fallback) {
         String value = properties.getProperty(key);
-        return value == null ? fallback : switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
-            case "true" -> true;
-            case "false" -> false;
-            default -> throw new IllegalArgumentException("Expected true or false for " + key);
-        };
+        return value == null
+                ? fallback
+                : switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
+                    case "true" -> true;
+                    case "false" -> false;
+                    default -> throw new IllegalArgumentException("Expected true or false for " + key);
+                };
     }
 
     private static int boundedInt(Properties properties, String key, int fallback, int minimum, int maximum) {
         String value = properties.getProperty(key);
         if (value == null) return fallback;
         int parsed = Integer.parseInt(value.trim());
-        if (parsed < minimum || parsed > maximum) throw new IllegalArgumentException(key + " must be between " + minimum + " and " + maximum);
+        if (parsed < minimum || parsed > maximum)
+            throw new IllegalArgumentException(key + " must be between " + minimum + " and " + maximum);
         return parsed;
     }
 
@@ -131,13 +234,16 @@ public record ThreadiumConfig(
         String value = properties.getProperty(key);
         if (value == null) return fallback;
         long parsed = Long.parseLong(value.trim());
-        if (parsed < minimum || parsed > maximum) throw new IllegalArgumentException(key + " must be between " + minimum + " and " + maximum);
+        if (parsed < minimum || parsed > maximum)
+            throw new IllegalArgumentException(key + " must be between " + minimum + " and " + maximum);
         return parsed;
     }
 
     private static String stringValue(Properties properties, String key, String fallback, String... allowed) {
-        String value=properties.getProperty(key); if(value==null)return fallback; value=value.trim().toLowerCase(java.util.Locale.ROOT);
-        for(String candidate:allowed)if(candidate.equals(value))return value;
+        String value = properties.getProperty(key);
+        if (value == null) return fallback;
+        value = value.trim().toLowerCase(java.util.Locale.ROOT);
+        for (String candidate : allowed) if (candidate.equals(value)) return value;
         throw new IllegalArgumentException("Unsupported value for " + key);
     }
 
@@ -155,9 +261,11 @@ public record ThreadiumConfig(
         properties.setProperty("phase.translucent.minimum.submits", Integer.toString(config.minTranslucentSubmits));
         properties.setProperty("phase.failures.maximum", Integer.toString(config.maxConsecutiveFailures));
         properties.setProperty("display.text.retained.enabled", Boolean.toString(config.retainedTextEnabled));
-        properties.setProperty("display.text.retained.maxCacheEntries", Integer.toString(config.retainedTextMaxCacheEntries));
+        properties.setProperty(
+                "display.text.retained.maxCacheEntries", Integer.toString(config.retainedTextMaxCacheEntries));
         properties.setProperty("display.text.retained.maxGpuBytes", Long.toString(config.retainedTextMaxGpuBytes));
-        properties.setProperty("display.text.retained.entryIdleSeconds", Integer.toString(config.retainedTextEntryIdleSeconds));
+        properties.setProperty(
+                "display.text.retained.entryIdleSeconds", Integer.toString(config.retainedTextEntryIdleSeconds));
         properties.setProperty("entity.gpu.enabled", Boolean.toString(config.gpuEntityEnabled));
         properties.setProperty("entity.gpu.backend", config.gpuBackend);
         properties.setProperty("entity.gpu.maxInstances", Integer.toString(config.gpuMaxInstances));
@@ -171,7 +279,8 @@ public record ThreadiumConfig(
         properties.setProperty("entity.gpu.batchConsolidation", Boolean.toString(config.gpuBatchConsolidation));
         properties.setProperty("entity.gpu.debugVisualMode", config.gpuDebugVisualMode);
         properties.setProperty("entity.gpu.debugSuppressVanilla", Boolean.toString(config.gpuDebugSuppressVanilla));
-        properties.setProperty("metrics.output.interval.seconds", Integer.toString(config.metricsOutputIntervalSeconds));
+        properties.setProperty(
+                "metrics.output.interval.seconds", Integer.toString(config.metricsOutputIntervalSeconds));
         try {
             Files.createDirectories(path.getParent());
             Path temporary = Files.createTempFile(path.getParent(), FILE_NAME, ".tmp");

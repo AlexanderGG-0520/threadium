@@ -1,8 +1,7 @@
 package dev.alex.threadium.render.modelpart;
 
-import net.minecraft.client.model.geom.ModelPart;
-
 import java.util.IdentityHashMap;
+import net.minecraft.client.model.geom.ModelPart;
 
 /** Render-thread-owned cache keyed by the renderer's shared model root identity. */
 final class ModelPartTopologyCache {

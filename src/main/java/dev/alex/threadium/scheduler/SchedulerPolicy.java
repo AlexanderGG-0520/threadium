@@ -5,7 +5,7 @@ public final class SchedulerPolicy {
     public static final int QUEUE_CAPACITY = 64;
     public static final int MAX_WORKERS = 4;
 
-    private SchedulerPolicy() { }
+    private SchedulerPolicy() {}
 
     public static int workerCount(int override, int processors) {
         if (override < 0 || processors < 1) throw new IllegalArgumentException("invalid worker inputs");
