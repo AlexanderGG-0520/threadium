@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "threadium",
+  "version": "${version}",
+  "name": "Threadium",
+  "description": "Client-side render preparation instrumentation and scheduling foundation.",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.alex.threadium.ThreadiumClient"
+    ]
+  },
+  "mixins": [
+    "threadium.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "fabric-api": "*",
+    "minecraft": "26.2"
+  }
+}

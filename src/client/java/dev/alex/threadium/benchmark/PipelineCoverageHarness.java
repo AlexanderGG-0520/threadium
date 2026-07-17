@@ -1,0 +1,386 @@
+package dev.alex.threadium.benchmark;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import dev.alex.threadium.ThreadiumClient;
+import dev.alex.threadium.render.modelpart.ModelPartRenderService;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.feature.ModelFeatureRenderer;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.resources.Identifier;
+
+/** Developer-only direct ModelFeature fixtures; inactive unless explicitly bootstrapped. */
+public final class PipelineCoverageHarness {
+    private static final String WORLD = "Threadium Pipeline Coverage";
+    private static final Identifier FALLBACK_PLAYER_TEXTURE =
+            Identifier.withDefaultNamespace("textures/entity/player/wide/steve.png");
+    private static final Identifier MASK =
+            Identifier.withDefaultNamespace("textures/entity/enderdragon/dragon_exploding.png");
+    private static final LinkedHashMap<String, Fixture> FIXTURES = buildFixtures();
+    private static final Map<String, Visual> visuals = new LinkedHashMap<>();
+    private static final Map<String, FixtureDiagnostic> diagnostics = new LinkedHashMap<>();
+    private static boolean bootstrapped, capturing;
+    private static boolean templateSourceLogged;
+    private static int activeFixtureCount = 1;
+    private static Identifier templateTexture;
+    private static String templateModelClass = "unresolved";
+    private static Path result;
+
+    static {
+        FIXTURES.keySet().forEach(name -> visuals.put(name, new Visual("PENDING", null)));
+    }
+
+    private PipelineCoverageHarness() {}
+
+    public record Fixture(String pipeline, String description, String expected, boolean sorted, int column, int row) {
+        public double worldX() {
+            return (column - 2) * 6.0;
+        }
+
+        public double worldY() {
+            return 70.0;
+        }
+
+        public double worldZ() {
+            return row * 8.0;
+        }
+
+        public double viewX() {
+            return worldX();
+        }
+
+        public double viewY() {
+            return 72.0;
+        }
+
+        public double viewZ() {
+            return worldZ() - 7.0;
+        }
+    }
+
+    private record Visual(String status, String reason) {}
+
+    private record FixtureDiagnostic(
+            String state,
+            Identifier texture,
+            boolean textureExists,
+            double submittedX,
+            double submittedY,
+            double submittedZ,
+            boolean positionMatches,
+            String modelClass,
+            int rootIdentity,
+            String preparedTextureView) {}
+
+    private static LinkedHashMap<String, Fixture> buildFixtures() {
+        LinkedHashMap<String, Fixture> out = new LinkedHashMap<>();
+        add(out, "entity_solid", "opaque ModelPart", "opaque textured geometry", false);
+        add(out, "entity_cutout_cull", "cutout-cull ModelPart", "cutout edges with back-face culling", false);
+        add(out, "entity_cutout", "cutout no-cull ModelPart", "cutout edges visible from both sides", false);
+        add(out, "entity_cutout_z_offset", "z-offset ModelPart", "layer remains free of z-fighting", false);
+        add(out, "entity_cutout_dissolve", "dissolve ModelPart", "mask clips the textured model", false);
+        add(out, "entity_translucent", "translucent ModelPart", "stable far-to-near transparent quads", true);
+        add(out, "entity_translucent_cull", "culled translucent ModelPart", "sorted transparency with culling", true);
+        add(out, "entity_translucent_emissive", "emissive translucent ModelPart", "bright emissive overlay", true);
+        add(out, "armor_cutout", "armor cutout factory", "layered cutout appearance", false);
+        add(out, "armor_decal", "armor decal factory", "depth-equal decal without z-fighting", false);
+        add(out, "armor_translucent", "translucent armor factory", "stable sorted translucent layer", true);
+        add(out, "banner_pattern", "banner pattern factory", "sorted translucent pattern", true);
+        add(out, "breeze_wind", "Breeze wind factory", "animated offset UV", true);
+        add(out, "energy_swirl", "energy swirl factory", "animated additive UV", true);
+        add(out, "eyes", "eyes factory", "emissive sorted geometry", true);
+        add(out, "glint", "entity glint factory", "animated glint matrix and blend", false);
+        add(out, "outline_cull", "derived culling outline factory", "outline target with culling", false);
+        add(out, "outline_no_cull", "outline factory", "outline target without culling", false);
+        add(out, "crumbling", "crumbling factory", "sheeted breaking projection", true);
+        add(out, "water_mask", "boat water-mask factory", "depth-only geometry", false);
+        return out;
+    }
+
+    private static void add(
+            LinkedHashMap<String, Fixture> out, String name, String description, String expected, boolean sorted) {
+        int i = out.size();
+        out.put(name, new Fixture(name, description, expected, sorted, i % 5, i / 5));
+    }
+
+    public static List<Fixture> fixtures() {
+        return List.copyOf(FIXTURES.values());
+    }
+
+    public static String bootstrap(Minecraft client) {
+        if (client.level == null || client.player == null)
+            return "[Threadium Coverage] Bootstrap rejected: no client world/player.";
+        String world = client.getSingleplayerServer() == null
+                ? ""
+                : client.getSingleplayerServer().getWorldData().getLevelName();
+        if (!WORLD.equals(world))
+            return "[Threadium Coverage] Bootstrap rejected: expected world '" + WORLD + "', got '" + world + "'.";
+        Identifier skin = client.player.getSkin().body().texturePath();
+        templateTexture = textureExists(client, skin) ? skin : FALLBACK_PLAYER_TEXTURE;
+        if (!textureExists(client, templateTexture))
+            return "[Threadium Coverage] Bootstrap failed: missing texture resource: " + templateTexture;
+        if (!textureExists(client, MASK))
+            return "[Threadium Coverage] Bootstrap failed: missing texture resource: " + MASK;
+        diagnostics.clear();
+        activeFixtureCount = 1;
+        bootstrapped = true;
+        return "[Threadium Coverage] Bootstrap complete: Stage 1 enabled (entity_solid only), texture="
+                + templateTexture;
+    }
+
+    public static String clear() {
+        bootstrapped = false;
+        capturing = false;
+        activeFixtureCount = 1;
+        templateTexture = null;
+        templateModelClass = "unresolved";
+        templateSourceLogged = false;
+        diagnostics.clear();
+        return "[Threadium Coverage] Fixtures disabled; unrelated world state was not modified.";
+    }
+
+    public static String stage(int count) {
+        if (!bootstrapped) return "[Threadium Coverage] Stage rejected: bootstrap first.";
+        if (count != 1 && count != 2 && count != 20) return "[Threadium Coverage] Stage must be 1, 2, or 20.";
+        activeFixtureCount = count;
+        return "[Threadium Coverage] Active fixtures: " + count;
+    }
+
+    public static String captureStart() {
+        if (!bootstrapped) return "[Threadium Coverage] Capture rejected: bootstrap first.";
+        ModelPartRenderService service = ModelPartRenderService.get();
+        if (service == null) return "[Threadium Coverage] Capture rejected: renderer unavailable.";
+        service.resetPipelineCoverage();
+        capturing = true;
+        result = null;
+        return "[Threadium Coverage] Capture started.";
+    }
+
+    public static String captureStop() {
+        if (!capturing) return "[Threadium Coverage] Capture rejected: not active.";
+        capturing = false;
+        result = write();
+        return "[Threadium Coverage] Capture stopped. Result: " + result;
+    }
+
+    public static String visual(String pipeline, boolean pass, String reason) {
+        if (!FIXTURES.containsKey(pipeline)) return "[Threadium Coverage] Unknown pipeline: " + pipeline;
+        visuals.put(pipeline, new Visual(pass ? "NOTE_PASS" : "NOTE_FAIL", reason));
+        return "[Threadium Coverage] Optional note recorded for " + pipeline
+                + ". Synthetic PlayerModel fixtures do not validate visual equivalence.";
+    }
+
+    public static String teleport(Minecraft client, String pipeline) {
+        Fixture fixture = FIXTURES.get(pipeline);
+        if (fixture == null) return "[Threadium Coverage] Unknown pipeline: " + pipeline;
+        if (client.player == null) return "[Threadium Coverage] Teleport rejected: no player.";
+        client.player.connection.sendCommand(
+                "tp @s " + fixture.viewX() + " " + fixture.viewY() + " " + fixture.viewZ() + " 0 10");
+        return "[Threadium Coverage] Pipeline: " + pipeline + " | Fixture: " + fixture.description + " | Expected: "
+                + fixture.expected;
+    }
+
+    public static List<String> status() {
+        ArrayList<String> out = new ArrayList<>();
+        long
+                missing =
+                        diagnostics.values().stream()
+                                .filter(d -> !d.textureExists)
+                                .count(),
+                mismatch =
+                        diagnostics.values().stream()
+                                .filter(d -> !d.positionMatches)
+                                .count();
+        out.add(
+                "[Threadium Coverage] mode=SYNTHETIC_REACHABILITY_ONLY; Synthetic PlayerModel fixtures do not validate visual equivalence.");
+        out.add("bootstrapped=" + bootstrapped + ", capturing=" + capturing + ", stage=" + activeFixtureCount
+                + ", result=" + (result == null ? "pending" : result));
+        out.add("templateValid=" + (templateTexture != null) + ", templateSourceModelClass=" + templateModelClass
+                + ", templateSourceTexture=" + templateTexture + ", fixturesRegistered=20, fixturesInitialized="
+                + diagnostics.size() + ", fixturesMissingTexture=" + missing + ", fixturesPositionMismatch="
+                + mismatch);
+        ModelPartRenderService service = ModelPartRenderService.get();
+        if (service != null) {
+            for (var c : service.pipelineCoverage()) {
+                Visual v = visuals.get(c.pipeline());
+                if (v != null) {
+                    Fixture f = FIXTURES.get(c.pipeline());
+                    FixtureDiagnostic d = diagnostics.get(c.pipeline());
+                    out.add(c.pipeline() + ": initializationState=" + (d == null ? "PENDING" : d.state) + ", texture="
+                            + (d == null ? templateTexture : d.texture) + ", textureExists="
+                            + (d != null && d.textureExists) + ", stationPosition="
+                            + position(f.worldX(), f.worldY(), f.worldZ()) + ", lastSubmittedPosition="
+                            + (d == null ? "pending" : position(d.submittedX, d.submittedY, d.submittedZ))
+                            + ", positionMatchesStation=" + (d != null && d.positionMatches) + ", encountered="
+                            + (c.accepted() + c.fallbacks()) + ", accepted=" + c.accepted() + ", fallback="
+                            + c.fallbacks() + ", instances=" + c.instances() + ", draws=" + c.drawCalls()
+                            + ", maxBatch=" + c.maximumBatchSize() + ", policy=" + c.batchingMode() + ", developerNote="
+                            + v.status + (v.reason == null ? "" : ", reason=" + v.reason));
+                }
+            }
+            out.add(service.sortedPipelineMetrics());
+        }
+        return out;
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public static List<ModelFeatureRenderer.Submit<?>> directSubmits(ModelFeatureRenderer.Submit<?> source) {
+        if (!bootstrapped) return List.of();
+        Minecraft client = Minecraft.getInstance();
+        var camera = client.gameRenderer.mainCamera().position();
+        templateModelClass = source.model().getClass().getName();
+        if (!templateSourceLogged) {
+            templateSourceLogged = true;
+            ThreadiumClient.LOGGER.info(
+                    "Threadium coverage template: source=normal_model_submit, category={}, model={}, root={}, canonicalPipeline={}, requestedTexture={}, rootTranslation={}",
+                    source.model().getClass().getSimpleName().contains("Player")
+                            ? "local_player_or_avatar"
+                            : "other_model",
+                    templateModelClass,
+                    System.identityHashCode(source.model().root()),
+                    source.renderType().pipeline().getLocation(),
+                    templateTexture,
+                    position(
+                            source.pose().pose().m30(),
+                            source.pose().pose().m31(),
+                            source.pose().pose().m32()));
+        }
+        ArrayList<ModelFeatureRenderer.Submit<?>> out = new ArrayList<>(activeFixtureCount);
+        HashSet<String> translations = new HashSet<>();
+        float animation = (System.currentTimeMillis() % 100000L) / 100000f;
+        int index = 0;
+        for (Fixture fixture : FIXTURES.values()) {
+            if (index++ >= activeFixtureCount) break;
+            PoseStack stack = new PoseStack();
+            stack.last().set(source.pose());
+            float tx = (float) (fixture.worldX() - camera.x()),
+                    ty = (float) (fixture.worldY() - camera.y()),
+                    tz = (float) (fixture.worldZ() - camera.z());
+            if (!translations.add(Float.floatToRawIntBits(tx) + ":" + Float.floatToRawIntBits(ty) + ":"
+                    + Float.floatToRawIntBits(tz)))
+                throw new IllegalStateException("Duplicate coverage fixture root translation: " + fixture.pipeline);
+            stack.last().pose().m30(tx).m31(ty).m32(tz);
+            PoseStack.Pose pose = stack.last();
+            RenderType type = renderType(fixture.pipeline, animation, templateTexture);
+            PoseStack.Pose decal = fixture.pipeline.equals("crumbling") ? pose : null;
+            out.add(new ModelFeatureRenderer.Submit(
+                    type,
+                    pose,
+                    source.model(),
+                    source.state(),
+                    source.lightCoords(),
+                    source.overlayCoords(),
+                    source.tintedColor(),
+                    null,
+                    decal));
+            if (!diagnostics.containsKey(fixture.pipeline)) {
+                boolean exists = textureExists(client, templateTexture);
+                String view = type.prepare().textures().isEmpty()
+                        ? "none"
+                        : type.prepare()
+                                .textures()
+                                .getFirst()
+                                .textureView()
+                                .getClass()
+                                .getSimpleName();
+                FixtureDiagnostic diagnostic = new FixtureDiagnostic(
+                        exists ? "INITIALIZED" : "FAILED",
+                        templateTexture,
+                        exists,
+                        fixture.worldX(),
+                        fixture.worldY(),
+                        fixture.worldZ(),
+                        true,
+                        templateModelClass,
+                        System.identityHashCode(source.model().root()),
+                        view);
+                diagnostics.put(fixture.pipeline, diagnostic);
+                ThreadiumClient.LOGGER.info(
+                        "Threadium coverage fixture: source=coverage_fixture, fixture={}, model={}, root={}, canonicalPipeline={}, requestedTexture={}, preparedTexture={}, resolvedGpuTexture={}, station={}, rootTranslation={}, positionMatchesStation=true",
+                        fixture.pipeline,
+                        templateModelClass,
+                        diagnostic.rootIdentity,
+                        type.pipeline().getLocation(),
+                        templateTexture,
+                        templateTexture,
+                        view,
+                        position(fixture.worldX(), fixture.worldY(), fixture.worldZ()),
+                        position(tx, ty, tz));
+            }
+        }
+        return out;
+    }
+
+    public static RenderType fixtureRenderType(String name, float animation) {
+        return renderType(name, animation, FALLBACK_PLAYER_TEXTURE);
+    }
+
+    private static RenderType renderType(String name, float animation, Identifier texture) {
+        return switch (name) {
+            case "entity_solid" -> RenderTypes.entitySolid(texture);
+            case "entity_cutout_cull" -> RenderTypes.entityCutoutCull(texture);
+            case "entity_cutout" -> RenderTypes.entityCutout(texture);
+            case "entity_cutout_z_offset" -> RenderTypes.entityCutoutZOffset(texture);
+            case "entity_cutout_dissolve" -> RenderTypes.entityCutoutDissolve(texture, MASK);
+            case "entity_translucent" -> RenderTypes.entityTranslucent(texture);
+            case "entity_translucent_cull" -> RenderTypes.entityTranslucentCullItemTarget(texture);
+            case "entity_translucent_emissive" -> RenderTypes.entityTranslucentEmissive(texture);
+            case "armor_cutout" -> RenderTypes.armorCutoutNoCull(texture);
+            case "armor_decal" -> RenderTypes.createArmorDecalCutoutNoCull(texture);
+            case "armor_translucent" -> RenderTypes.armorTranslucent(texture);
+            case "banner_pattern" -> RenderTypes.bannerPattern(texture);
+            case "breeze_wind" -> RenderTypes.breezeWind(texture, animation, animation * .5f);
+            case "energy_swirl" -> RenderTypes.energySwirl(texture, animation, animation * .5f);
+            case "eyes" -> RenderTypes.eyes(texture);
+            case "glint" -> RenderTypes.entityGlint();
+            case "outline_cull" ->
+                RenderTypes.entityCutoutCull(texture).outline().orElseThrow();
+            case "outline_no_cull" -> RenderTypes.outline(texture);
+            case "crumbling" -> RenderTypes.crumbling(texture);
+            case "water_mask" -> RenderTypes.waterMask();
+            default -> throw new IllegalArgumentException(name);
+        };
+    }
+
+    private static boolean textureExists(Minecraft client, Identifier texture) {
+        return client.getResourceManager().getResource(texture).isPresent()
+                || client.player != null
+                        && client.player.getSkin().body().texturePath().equals(texture);
+    }
+
+    private static String position(double x, double y, double z) {
+        return String.format(Locale.ROOT, "[%.2f,%.2f,%.2f]", x, y, z);
+    }
+
+    private static Path write() {
+        try {
+            Path dir = Path.of("run", "pipeline-coverage");
+            Files.createDirectories(dir);
+            Path path = dir.resolve(Instant.now().toString().replace(':', '-') + ".json");
+            List<String> lines = status();
+            StringBuilder json = new StringBuilder(
+                    "{\n  \"minecraftVersion\": \"26.2\",\n  \"sceneVersion\": 1,\n  \"pipelines\": [\n");
+            for (int i = 0; i < lines.size(); i++)
+                json.append("    \"")
+                        .append(lines.get(i).replace("\\", "\\\\").replace("\"", "\\\""))
+                        .append("\"")
+                        .append(i + 1 < lines.size() ? "," : "")
+                        .append('\n');
+            json.append("  ]\n}\n");
+            Files.writeString(path, json);
+            return path;
+        } catch (IOException failure) {
+            return Path.of("write-failed-" + failure.getClass().getSimpleName().toLowerCase(Locale.ROOT));
+        }
+    }
+}
