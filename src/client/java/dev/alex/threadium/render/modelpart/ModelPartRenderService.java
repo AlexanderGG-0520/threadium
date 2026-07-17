@@ -5,8 +5,8 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.alex.threadium.ThreadiumClient;
 import dev.alex.threadium.benchmark.BoundedFallbackDiagnostics;
+import dev.alex.threadium.compat.IrisCompatibility;
 import dev.alex.threadium.config.ThreadiumConfig;
-import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.model.Model;
 import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.renderer.rendertype.RenderType;
@@ -22,6 +22,7 @@ public final class ModelPartRenderService {
     private final ModelPartDiagnosticOverlay diagnosticOverlay = new ModelPartDiagnosticOverlay(metrics);
     private final DebugVisualMode debugMode;
     private boolean loggedOverlayInterception, loggedForbiddenSuppression;
+    private boolean irisShadersActive;
     private SelectingModelPartGpuBackend backend;
     private final ModelPartMeshCache cache;
     private final GenericModelPartMeshBaker baker = new GenericModelPartMeshBaker();
@@ -36,6 +37,7 @@ public final class ModelPartRenderService {
     private ModelPartRenderService(ThreadiumConfig c) {
         config = c;
         debugMode = DebugVisualMode.parse(c.gpuDebugVisualMode());
+        irisShadersActive = IrisCompatibility.isShaderPackInUse();
         backend = new SelectingModelPartGpuBackend(
                 c.gpuBackend(),
                 c.gpuMaxInstances(),
@@ -43,7 +45,7 @@ public final class ModelPartRenderService {
                 c.gpuBatchConsolidation(),
                 debugMode,
                 c.gpuEntityEnabled()
-                        && compatibilityReason(c) == null
+                        && compatibilityReason(c, irisShadersActive) == null
                         && !c.gpuBackend().equals("disabled")
                         && !debugMode.overlayOnly(),
                 metrics);
@@ -67,13 +69,12 @@ public final class ModelPartRenderService {
     }
 
     private String compatibilityReason() {
-        return compatibilityReason(config);
+        return compatibilityReason(config, irisShadersActive);
     }
 
-    private static String compatibilityReason(ThreadiumConfig config) {
+    private static String compatibilityReason(ThreadiumConfig config, boolean irisShadersActive) {
         if (!config.gpuEntityEnabled()) return "configuration";
-        if (FabricLoader.getInstance().isModLoaded("iris")) return "Iris is installed";
-        if (FabricLoader.getInstance().isModLoaded("immediatelyfast")) return "ImmediatelyFast overlap is unverified";
+        if (irisShadersActive) return "Iris shader pack is active";
         return null;
     }
 
@@ -367,10 +368,45 @@ public final class ModelPartRenderService {
     }
 
     public void beginDiagnosticFrame() {
+        refreshIrisShaderState();
         if (DifferentialExecutionScope.active()) DifferentialExecutionScope.reset();
         posePalettes.beginFrame();
         backend.beginFrame();
         diagnosticOverlay.beginFrame(debugMode);
+    }
+
+    private void refreshIrisShaderState() {
+        boolean active = IrisCompatibility.isShaderPackInUse();
+        if (active == irisShadersActive) return;
+        irisShadersActive = active;
+        rebuildBackendForCompatibilityChange();
+        ThreadiumClient.LOGGER.info(
+                "GPU ModelPart Iris compatibility changed: shadersActive={}, replacementEnabled={}",
+                active,
+                compatibilityReason() == null);
+    }
+
+    private void rebuildBackendForCompatibilityChange() {
+        DifferentialExecutionScope.reset();
+        generation++;
+        for (var h : cache.handles()) backend.destroy(h);
+        cache.clear();
+        topologies.clear();
+        posePalettes.clear();
+        backend.clear();
+        backend.close();
+        backend = new SelectingModelPartGpuBackend(
+                config.gpuBackend(),
+                config.gpuMaxInstances(),
+                config.gpuMaxBonesPerFrame(),
+                config.gpuBatchConsolidation(),
+                debugMode,
+                config.gpuEntityEnabled()
+                        && compatibilityReason() == null
+                        && !config.gpuBackend().equals("disabled")
+                        && !debugMode.overlayOnly(),
+                metrics);
+        backend.invalidatePipelines(generation);
     }
 
     public void drawDiagnosticOverlayAtWorldTail() {
