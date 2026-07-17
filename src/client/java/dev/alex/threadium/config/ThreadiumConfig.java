@@ -60,7 +60,7 @@ public record ThreadiumConfig(
                 512,
                 64L * 1024L * 1024L,
                 60,
-                false,
+                true,
                 "auto",
                 8192,
                 128,

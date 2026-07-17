@@ -68,6 +68,12 @@ java {
     withSourcesJar()
 }
 
+tasks.withType(Jar).configureEach {
+    from('LICENSE') {
+        rename { "${it}_${project.archives_base_name}" }
+    }
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.release = 25
     options.encoding = 'UTF-8'

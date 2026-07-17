@@ -3,7 +3,16 @@
   "id": "threadium",
   "version": "${version}",
   "name": "Threadium",
-  "description": "Client-side render preparation instrumentation and scheduling foundation.",
+  "description": "Accelerates eligible ModelPart entity rendering with safe GPU batching and automatic vanilla fallback.",
+  "authors": [
+    "AlexanderGG"
+  ],
+  "contact": {
+    "homepage": "https://github.com/AlexanderGG-0520/threadium",
+    "sources": "https://github.com/AlexanderGG-0520/threadium",
+    "issues": "https://github.com/AlexanderGG-0520/threadium/issues"
+  },
+  "license": "MIT",
   "environment": "client",
   "entrypoints": {
     "client": [
@@ -15,7 +24,8 @@
   ],
   "depends": {
     "fabricloader": ">=0.19.3",
-    "fabric-api": "*",
-    "minecraft": "26.2"
+    "fabric-api": ">=0.154.2+26.2",
+    "minecraft": "26.2",
+    "java": ">=25"
   }
 }

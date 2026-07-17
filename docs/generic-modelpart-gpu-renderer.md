@@ -1,5 +1,10 @@
 # Generic ModelPart GPU renderer (experimental)
 
+> **Current backend note:** `0.1.0-beta.1` routes production replacement through
+> `Blaze3dModelPartBackend`. References below to the earlier raw OpenGL 3.3/4.5
+> prototypes are retained as implementation history and do not describe the
+> active release backend.
+
 ## Verified 26.2 boundary
 
 Threadium targets unobfuscated Minecraft 26.2. `ModelFeatureRenderer.prepareModel(ModelFeatureRenderer.Submit): void` copies `Submit.pose` (bytecode 11), chooses/wraps the consumer (19–62), invokes `Model.setupAnim(Object): void` (73), then invokes `Model.renderToBuffer(PoseStack, VertexConsumer, int, int, int): void` (94). The latter enters `ModelPart.render`, `ModelPart.compile`, and `ModelPart.Cube.compile`; the cube method calls `VertexConsumer.addVertex(float,float,float,int,float,float,int,int,float,float,float)` at bytecode 179. Threadium redirects only the call at 94 (`ordinal=0`, `require=1`, `expect=1`). Rejected calls execute the original method unchanged.
@@ -26,7 +31,7 @@ Exact pose deduplication is frame-local and collision-verified. For each topolog
 
 `SelectingModelPartGpuBackend` initializes lazily on the Render Thread from the first intercepted model invocation after LWJGL capabilities exist. The old implementation returned from `ensureReady` while still `UNINITIALIZED` whenever `OpenGL45` was false; Minecraft's 3.3 context therefore silently rejected every invocation. Selection now performs one guarded attempt, logs the complete active-context feature projection, and transitions through `INITIALIZING` to either `READY` or `FAILED`.
 
-`auto` selects OpenGL45 only when the active context exposes 4.5, instancing, TBO/UBO/VAO, buffer storage, SSBO, and direct-state-access requirements. Otherwise it selects OpenGL33 when instanced arrays/draws, texture buffers, uniform buffers, and VAOs are present. `opengl45`, `opengl33`, and `disabled` may be forced; unsupported forced modes fail once and retain vanilla rendering.
+The current release backend selection is intentionally simple: `disabled` prevents backend initialization, while `auto`, `opengl45`, and `opengl33` all route enabled production rendering through `Blaze3dModelPartBackend`. The legacy OpenGL-named values remain accepted for configuration compatibility and do not force the historical raw OpenGL backends.
 
 The OpenGL33 backend uses bind-to-edit VAO/VBO/IBO calls, a streamed texture-buffer object for bones, and a streamed 96-byte instance VBO with divisors. Each bone occupies seven RGBA32F texels: four pose-matrix columns followed by three inverse-transpose normal-matrix columns. The instance contains a root matrix, absolute bone base, packed light, overlay, and normalized tint/alpha. Bounded native staging buffers are allocated once with the backend and reused. The complete group is orphaned and uploaded once; each adjacent batch rebinds instance attribute byte offsets and calls `glDrawElementsInstanced` with its real instance count. No base-instance extension is required.
 
@@ -50,7 +55,7 @@ Mesh ownership belongs to the bounded generation-scoped cache. Resource reload, 
 
 ## Configuration
 
-The safe default is `entity.gpu.enabled=false` until GPU-host visual parity is confirmed. The properties also include `entity.gpu.debugVisualMode` and `entity.gpu.debugSuppressVanilla`. Modes are `off`, `screen_triangle`, `mesh_clip_space`, `mesh_magenta`, `mesh_no_depth`, `mesh_no_cull`, `mesh_identity_bone`, `mesh_identity_root`, `mesh_projection_only`, and `normal`. Screen-triangle and clip-space modes always retain vanilla output. Other diagnostic modes retain vanilla unless `debugSuppressVanilla=true`; normal/off use the ordinary queue-before-suppression rule. A mode change closes resources, clears pending work, advances the backend epoch and logs once.
+The public beta default is `entity.gpu.enabled=true`; setting it to `false` immediately restores vanilla entity rendering. The properties also include `entity.gpu.debugVisualMode` and `entity.gpu.debugSuppressVanilla`. Modes are `off`, `screen_triangle`, `mesh_clip_space`, `mesh_magenta`, `mesh_no_depth`, `mesh_no_cull`, `mesh_identity_bone`, `mesh_identity_root`, `mesh_projection_only`, and `normal`. Screen-triangle and clip-space modes always retain vanilla output. Other diagnostic modes retain vanilla unless `debugSuppressVanilla=true`; normal/off use the ordinary queue-before-suppression rule. A mode change closes resources, clears pending work, advances the backend epoch and logs once.
 
 `screen_triangle` uses a separate GLSL 330 program and VAO, no model/instance/bone data, no textures, depth, blend, or culling. It targets the same resolved render-type attachment and records a one-shot framebuffer/viewport/draw-buffer/program/error diagnostic. Mesh modes use a shader integer selector: clip-space mesh validates the real VAO/VBO/IBO; magenta validates transforms without material sampling; identity-bone/root and projection-only isolate matrix stages; no-depth/no-cull isolate raster state. Debug GL errors and incomplete FBOs are aggregated, not logged per entity.
 
