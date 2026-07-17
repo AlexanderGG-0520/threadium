@@ -1,0 +1,58 @@
+name: Feature request
+description: Propose a concrete improvement to Threadium
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explain the problem first, then the proposed solution. Requests should fit Threadium's scope as a safe client-side rendering optimization mod.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or limitation
+      description: What concrete problem exists today, and who is affected by it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or API you want, not only its name.
+    validations:
+      required: true
+
+  - type: textarea
+    id: benefit
+    attributes:
+      label: Expected benefit
+      description: Explain the expected performance, compatibility, diagnostics, usability, or developer benefit.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe workarounds or other designs you considered and why they are insufficient.
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical-context
+    attributes:
+      label: Technical context
+      description: Add relevant rendering paths, affected entity models, profiling data, links, sketches, or implementation constraints.
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope checks
+      options:
+        - label: This request is related to client-side rendering optimization, compatibility, diagnostics, configuration, or the future Threadium API.
+          required: true
+        - label: This request does not require moving OpenGL work onto arbitrary background threads.
+          required: true
+        - label: I searched existing issues and did not find the same request.
+          required: true

@@ -1,0 +1,132 @@
+name: Bug report
+description: Report a reproducible defect in Threadium
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please provide enough detail to reproduce it reliably.
+
+        Remove sensitive information from logs before uploading them.
+
+  - type: input
+    id: threadium-version
+    attributes:
+      label: Threadium version
+      description: Use the exact version shown by your launcher or Mod Menu.
+      placeholder: 0.1.0-beta.3
+    validations:
+      required: true
+
+  - type: input
+    id: minecraft-version
+    attributes:
+      label: Minecraft version
+      placeholder: "26.2"
+    validations:
+      required: true
+
+  - type: input
+    id: fabric-loader-version
+    attributes:
+      label: Fabric Loader version
+      placeholder: 0.18.x
+    validations:
+      required: true
+
+  - type: input
+    id: java-version
+    attributes:
+      label: Java version
+      placeholder: Java 25
+    validations:
+      required: true
+
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+      placeholder: CachyOS, Windows 11, NixOS, etc.
+    validations:
+      required: true
+
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Relevant hardware
+      description: Include CPU and GPU. Add driver details when the issue is rendering-related.
+      placeholder: |
+        CPU: Intel Core i5-12400
+        GPU: NVIDIA GeForce RTX 4060 Ti
+        Driver: 610.xx
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: Reproduction frequency
+      options:
+        - Always
+        - Often
+        - Sometimes
+        - Reproduced once
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the defect and when it occurs.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reliable sequence of actions.
+      placeholder: |
+        1. Launch the game with ...
+        2. Enter a world with ...
+        3. Look at ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: mods
+    attributes:
+      label: Installed mods
+      description: Attach a launcher export or paste the complete mod list. Do not list only the mods you think are relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and crash reports
+      description: Drag and drop latest.log, the crash report, and any relevant Threadium diagnostics here.
+      placeholder: Attach files here instead of using external paste links when possible.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I reproduced this with an official Threadium build rather than a modified jar.
+          required: true
+        - label: I included the complete mod list and relevant logs.
+          required: true

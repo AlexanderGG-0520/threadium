@@ -1,0 +1,122 @@
+name: Mod compatibility report
+description: Report a conflict between Threadium and another mod
+title: "[Compatibility]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form when the problem only appears with a specific mod combination.
+
+        A minimal reproduction is much more useful than a full production modpack alone.
+
+  - type: input
+    id: threadium-version
+    attributes:
+      label: Threadium version
+      placeholder: 0.1.0-beta.3
+    validations:
+      required: true
+
+  - type: input
+    id: minecraft-version
+    attributes:
+      label: Minecraft version
+      placeholder: "26.2"
+    validations:
+      required: true
+
+  - type: input
+    id: fabric-loader-version
+    attributes:
+      label: Fabric Loader version
+      placeholder: 0.18.x
+    validations:
+      required: true
+
+  - type: input
+    id: conflicting-mod
+    attributes:
+      label: Conflicting mod and version
+      placeholder: Iris 1.x.x
+    validations:
+      required: true
+
+  - type: dropdown
+    id: symptom
+    attributes:
+      label: Type of incompatibility
+      options:
+        - Crash during startup
+        - Crash while playing
+        - Rendering corruption
+        - Missing or incorrect entities
+        - Severe performance regression
+        - Configuration conflict
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed behavior
+      description: Explain exactly what changes when both mods are enabled.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction setup
+      description: List the smallest mod set and exact steps that reproduce the problem.
+      placeholder: |
+        Mods:
+        - Fabric Loader ...
+        - Threadium ...
+        - Other mod ...
+
+        Steps:
+        1. ...
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: matrix
+    attributes:
+      label: Combination test results
+      description: State what happens with each mod enabled or disabled.
+      placeholder: |
+        Threadium only: works
+        Other mod only: works
+        Both enabled: fails
+    validations:
+      required: true
+
+  - type: textarea
+    id: complete-mod-list
+    attributes:
+      label: Complete mod list
+      description: Attach a launcher export or paste the complete list from the original environment.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, crash reports, and diagnostics
+      description: Drag and drop latest.log, crash reports, screenshots, and Threadium diagnostic output here.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for this mod combination.
+          required: true
+        - label: I tested the smallest mod combination I could reasonably produce.
+          required: true
+        - label: I verified that each mod works when tested without the other.
+          required: true
