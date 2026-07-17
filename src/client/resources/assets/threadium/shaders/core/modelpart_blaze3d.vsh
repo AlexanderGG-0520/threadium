@@ -30,16 +30,14 @@ flat out int vertexLight;
 flat out int vertexOverlay;
 
 vec2 threadium_decal_uv(vec3 position, vec3 normal) {
-    vec3 p = vec3(-position.x, -position.z, -position.y);
     vec3 a = abs(normal);
     if (a.y >= a.x && a.y >= a.z) {
-        if (normal.y < 0.0) p = vec3(p.x, -p.y, -p.z);
-    } else if (a.z >= a.x) {
-        p = normal.z < 0.0 ? vec3(-p.x, p.z, p.y) : vec3(p.x, -p.z, p.y);
-    } else {
-        p = normal.x < 0.0 ? vec3(p.z, p.x, p.y) : vec3(-p.z, -p.x, p.y);
+        return normal.y < 0.0 ? vec2(position.x, -position.z) : vec2(position.x, position.z);
     }
-    return -p.xy;
+    if (a.z >= a.x) {
+        return normal.z < 0.0 ? vec2(-position.x, -position.y) : vec2(position.x, -position.y);
+    }
+    return normal.x < 0.0 ? vec2(-position.z, -position.y) : vec2(position.z, -position.y);
 }
 
 void main() {
