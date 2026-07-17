@@ -1,0 +1,116 @@
+name: Performance regression report
+description: Report measurable performance loss or unstable frame pacing
+title: "[Performance]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Performance reports must include comparable measurements. FPS from different scenes, settings, or game states cannot be meaningfully compared.
+
+  - type: input
+    id: threadium-version
+    attributes:
+      label: Threadium version
+      placeholder: 0.1.0-beta.3
+    validations:
+      required: true
+
+  - type: input
+    id: minecraft-version
+    attributes:
+      label: Minecraft version
+      placeholder: "26.2"
+    validations:
+      required: true
+
+  - type: input
+    id: fabric-loader-version
+    attributes:
+      label: Fabric Loader version
+      placeholder: 0.18.x
+    validations:
+      required: true
+
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware and software environment
+      placeholder: |
+        CPU:
+        GPU:
+        RAM:
+        Operating system:
+        Java version:
+        GPU driver:
+    validations:
+      required: true
+
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Benchmark scenario
+      description: Describe the world, entity type and count, camera position, render distance, graphics settings, and test duration.
+    validations:
+      required: true
+
+  - type: textarea
+    id: methodology
+    attributes:
+      label: Measurement method
+      description: Explain the warmup, number of runs, metric source, FPS cap, VSync state, and how background load was controlled.
+    validations:
+      required: true
+
+  - type: textarea
+    id: results
+    attributes:
+      label: Results
+      description: Include Threadium disabled and enabled results from the same scenario. Average FPS and 1% low are preferred.
+      placeholder: |
+        Threadium disabled:
+        - Average FPS:
+        - 1% low:
+
+        Threadium enabled:
+        - Average FPS:
+        - 1% low:
+    validations:
+      required: true
+
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Threadium configuration
+      description: Paste the active configuration and mention any runtime changes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: mods
+    attributes:
+      label: Complete mod list
+      description: Attach a launcher export or paste the complete mod list.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Logs and Threadium diagnostics
+      description: Drag and drop latest.log, benchmark output, profiler captures, and relevant diagnostics here.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I compared the same scene, settings, and game state.
+          required: true
+        - label: I disabled VSync and any FPS limit, or documented the active limit.
+          required: true
+        - label: I ran enough trials to rule out a single noisy measurement.
+          required: true
+        - label: I searched existing performance issues for the same regression.
+          required: true
