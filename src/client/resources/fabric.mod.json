@@ -17,6 +17,9 @@
   "entrypoints": {
     "client": [
       "dev.alex.threadium.ThreadiumClient"
+    ],
+    "modmenu": [
+      "dev.alex.threadium.config.ThreadiumModMenuApi"
     ]
   },
   "mixins": [
@@ -27,5 +30,8 @@
     "fabric-api": ">=0.154.2+26.2",
     "minecraft": "26.2",
     "java": ">=25"
+  },
+  "suggests": {
+    "modmenu": ">=20.0.0-beta.4"
   }
 }

@@ -109,6 +109,11 @@ public record ThreadiumConfig(
                 metricsOutputIntervalSeconds);
     }
 
+    public static void save(ThreadiumConfig config) {
+        Path path = FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
+        writeConfig(path, config);
+    }
+
     public static ThreadiumConfig load() {
         ThreadiumConfig defaults = defaults();
         Path path = FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
@@ -201,7 +206,7 @@ public record ThreadiumConfig(
                             5,
                             3_600));
             if (!Files.exists(path)) {
-                writeDefaults(path, config);
+                writeConfig(path, config);
             }
             return config;
         } catch (IllegalArgumentException exception) {
@@ -247,8 +252,19 @@ public record ThreadiumConfig(
         throw new IllegalArgumentException("Unsupported value for " + key);
     }
 
-    private static void writeDefaults(Path path, ThreadiumConfig config) {
+    private static void writeConfig(Path path, ThreadiumConfig config) {
         Properties properties = new Properties();
+        if (Files.exists(path)) {
+            try (InputStream input = Files.newInputStream(path)) {
+                properties.load(input);
+            } catch (IOException | IllegalArgumentException exception) {
+                ThreadiumClient.LOGGER.warn(
+                        "Could not preserve unknown configuration keys from {}; rewriting known values",
+                        path,
+                        exception);
+                properties.clear();
+            }
+        }
         properties.setProperty("enabled", Boolean.toString(config.enabled));
         properties.setProperty("metrics.enabled", Boolean.toString(config.metricsEnabled));
         properties.setProperty("debug.logging", Boolean.toString(config.debugLogging));
@@ -288,12 +304,12 @@ public record ThreadiumConfig(
                 properties.store(output, " Threadium Phase 0 configuration");
             }
             try {
-                Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE);
+                Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
                 Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (IOException exception) {
-            ThreadiumClient.LOGGER.warn("Could not write default configuration {}", path, exception);
+            ThreadiumClient.LOGGER.warn("Could not write configuration {}", path, exception);
         }
     }
 }
