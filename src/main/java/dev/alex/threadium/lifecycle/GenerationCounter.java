@@ -6,6 +6,11 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class GenerationCounter {
     private final AtomicLong value = new AtomicLong();
 
-    public long current() { return value.get(); }
-    public long advance() { return value.incrementAndGet(); }
+    public long current() {
+        return value.get();
+    }
+
+    public long advance() {
+        return value.incrementAndGet();
+    }
 }

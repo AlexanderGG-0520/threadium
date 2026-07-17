@@ -1,11 +1,12 @@
 package dev.alex.threadium.metrics;
 
-import org.junit.jupiter.api.Test;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import org.junit.jupiter.api.Test;
+
 class TimingAccumulatorTest {
-    @Test void accumulatesCountTotalAndMaximum() {
+    @Test
+    void accumulatesCountTotalAndMaximum() {
         TimingAccumulator accumulator = new TimingAccumulator();
         accumulator.record(12);
         accumulator.record(4);
@@ -19,7 +20,8 @@ class TimingAccumulatorTest {
         assertEquals(12, sample.averageNanos());
     }
 
-    @Test void resetProducesZeroSample() {
+    @Test
+    void resetProducesZeroSample() {
         TimingAccumulator accumulator = new TimingAccumulator();
         accumulator.record(5);
         accumulator.snapshotAndReset();
@@ -33,13 +35,15 @@ class TimingAccumulatorTest {
         assertEquals("count=0,totalNanos=0,minNanos=0,maxNanos=0", sample.describe());
     }
 
-    @Test void ignoresNegativeDuration() {
+    @Test
+    void ignoresNegativeDuration() {
         TimingAccumulator accumulator = new TimingAccumulator();
         accumulator.record(-1);
         assertEquals(0, accumulator.snapshotAndReset().count());
     }
 
-    @Test void totalSaturatesAndConcurrentRecordsRemainAccountedFor() throws Exception {
+    @Test
+    void totalSaturatesAndConcurrentRecordsRemainAccountedFor() throws Exception {
         TimingAccumulator accumulator = new TimingAccumulator();
         accumulator.record(Long.MAX_VALUE - 1);
         accumulator.record(10);

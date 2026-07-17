@@ -1,6 +1,7 @@
 plugins {
     id 'net.fabricmc.fabric-loom' version "${loom_version}"
     id 'maven-publish'
+    id 'com.diffplug.spotless' version '8.8.0'
 }
 
 version = project.mod_version
@@ -49,6 +50,15 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+}
+
+spotless {
+    java {
+        target 'src/**/*.java'
+        palantirJavaFormat('2.96.0').style('PALANTIR').formatJavadoc(true)
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
 }
 
 java {

@@ -1,7 +1,7 @@
 package dev.alex.threadium.render.modelpart;
 
 public final class PipelineCompilationPolicy {
-    private PipelineCompilationPolicy() { }
+    private PipelineCompilationPolicy() {}
 
     public static PipelineValidity evaluate(long generation, ValidityProbe probe) {
         try {
@@ -14,5 +14,7 @@ public final class PipelineCompilationPolicy {
     }
 
     @FunctionalInterface
-    public interface ValidityProbe { boolean isValid() throws Throwable; }
+    public interface ValidityProbe {
+        boolean isValid() throws Throwable;
+    }
 }

@@ -1,11 +1,12 @@
 package dev.alex.threadium.lifecycle;
 
-import org.junit.jupiter.api.Test;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import org.junit.jupiter.api.Test;
+
 class GenerationCounterTest {
-    @Test void reportsEachGenerationExactlyOnce() {
+    @Test
+    void reportsEachGenerationExactlyOnce() {
         GenerationCounter counter = new GenerationCounter();
         assertEquals(0, counter.current());
         assertEquals(1, counter.advance());

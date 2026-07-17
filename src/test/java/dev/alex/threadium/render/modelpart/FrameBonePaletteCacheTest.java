@@ -1,16 +1,16 @@
 package dev.alex.threadium.render.modelpart;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.List;
+import java.util.Map;
 import net.minecraft.client.model.geom.ModelPart;
 import org.joml.Matrix4f;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
-import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.*;
-
 class FrameBonePaletteCacheTest {
-    @Test void exactPoseAndTopologyReusePalette() {
+    @Test
+    void exactPoseAndTopologyReusePalette() {
         Fixture fixture = fixture();
         ModelPartBoneData palette = palette(1);
         assertNull(fixture.cache.find(fixture.topology));
@@ -18,7 +18,8 @@ class FrameBonePaletteCacheTest {
         assertSame(palette, fixture.cache.find(fixture.topology));
     }
 
-    @Test void translationRotationScaleAndVisibilityDifferencesMiss() {
+    @Test
+    void translationRotationScaleAndVisibilityDifferencesMiss() {
         assertPoseChangeMiss(part -> part.x = 1);
         assertPoseChangeMiss(part -> part.yRot = 0.25f);
         assertPoseChangeMiss(part -> part.zScale = 2);
@@ -26,7 +27,8 @@ class FrameBonePaletteCacheTest {
         assertPoseChangeMiss(part -> part.skipDraw = true);
     }
 
-    @Test void differentTopologyNeverShares() {
+    @Test
+    void differentTopologyNeverShares() {
         Fixture first = fixture();
         Fixture second = fixture();
         first.cache.find(first.topology);
@@ -34,7 +36,8 @@ class FrameBonePaletteCacheTest {
         assertNull(first.cache.find(second.topology));
     }
 
-    @Test void hashCollisionStillRequiresExactComparison() {
+    @Test
+    void hashCollisionStillRequiresExactComparison() {
         Fixture fixture = fixture();
         assertNull(fixture.cache.findWithHashForTest(fixture.topology, 7));
         fixture.cache.store(palette(1));
@@ -42,18 +45,21 @@ class FrameBonePaletteCacheTest {
         assertNull(fixture.cache.findWithHashForTest(fixture.topology, 7));
     }
 
-    @Test void identicalPopulationCreatesOnePaletteAnd255Hits() {
+    @Test
+    void identicalPopulationCreatesOnePaletteAnd255Hits() {
         Fixture fixture = fixture();
         int hits = 0;
         for (int i = 0; i < 256; i++) {
             ModelPartBoneData found = fixture.cache.find(fixture.topology);
-            if (found == null) fixture.cache.store(palette(i)); else hits++;
+            if (found == null) fixture.cache.store(palette(i));
+            else hits++;
         }
         assertEquals(1, fixture.cache.size());
         assertEquals(255, hits);
     }
 
-    @Test void distinctPopulationCreates256Palettes() {
+    @Test
+    void distinctPopulationCreates256Palettes() {
         Fixture fixture = fixture();
         for (int i = 0; i < 256; i++) {
             fixture.part.x = i;
@@ -63,7 +69,8 @@ class FrameBonePaletteCacheTest {
         assertEquals(256, fixture.cache.size());
     }
 
-    @Test void frameBoundaryDropsPaletteReferences() {
+    @Test
+    void frameBoundaryDropsPaletteReferences() {
         Fixture fixture = fixture();
         fixture.cache.find(fixture.topology);
         fixture.cache.store(palette(1));
@@ -72,7 +79,8 @@ class FrameBonePaletteCacheTest {
         assertNull(fixture.cache.find(fixture.topology));
     }
 
-    @Test void rootTransformsRemainIndependentOfSharedLocalPalette() {
+    @Test
+    void rootTransformsRemainIndependentOfSharedLocalPalette() {
         Fixture fixture = fixture();
         fixture.cache.find(fixture.topology);
         ModelPartBoneData palette = palette(1);
@@ -100,9 +108,8 @@ class FrameBonePaletteCacheTest {
     }
 
     private static ModelPartBoneData palette(int value) {
-        return new ModelPartBoneData(new float[]{value}, new long[]{1});
+        return new ModelPartBoneData(new float[] {value}, new long[] {1});
     }
 
-    private record Fixture(FrameBonePaletteCache cache, ModelPart part,
-                           GenericModelPartTopology topology) {}
+    private record Fixture(FrameBonePaletteCache cache, ModelPart part, GenericModelPartTopology topology) {}
 }

@@ -3,10 +3,11 @@ package dev.alex.threadium.lifecycle;
 import dev.alex.threadium.ThreadiumClient;
 import dev.alex.threadium.config.ThreadiumConfig;
 import dev.alex.threadium.metrics.ThreadiumMetrics;
-import dev.alex.threadium.scheduler.ThreadiumScheduler;
+import dev.alex.threadium.render.modelpart.ModelPartRenderService;
 import dev.alex.threadium.render.phase.ThreadiumPhasePipeline;
 import dev.alex.threadium.render.text.RetainedTextManager;
-import dev.alex.threadium.render.modelpart.ModelPartRenderService;
+import dev.alex.threadium.scheduler.ThreadiumScheduler;
+import java.util.concurrent.atomic.AtomicBoolean;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -14,8 +15,6 @@ import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
 import net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.PackType;
-
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Owns lifecycle transitions; no world, renderer, entity, or resource object is retained. */
 public final class ThreadiumLifecycle {
@@ -25,7 +24,7 @@ public final class ThreadiumLifecycle {
     private static ThreadiumScheduler scheduler;
     private static ThreadiumMetrics metrics;
 
-    private ThreadiumLifecycle() { }
+    private ThreadiumLifecycle() {}
 
     public static void initialize(ThreadiumConfig config, ThreadiumMetrics newMetrics) {
         if (!INITIALIZED.compareAndSet(false, true)) {
@@ -42,16 +41,22 @@ public final class ThreadiumLifecycle {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             dev.alex.threadium.benchmark.ThreadiumBenchmark.tick(client);
             dev.alex.threadium.benchmark.PipelineDifferentialRunner.tick();
-            if (metrics != null && scheduler != null) metrics.reportIfDue(scheduler, worldGeneration(), resourceGeneration());
+            if (metrics != null && scheduler != null)
+                metrics.reportIfDue(scheduler, worldGeneration(), resourceGeneration());
             RetainedTextManager.pollRuntimeConfig();
-            if(!dev.alex.threadium.benchmark.ThreadiumBenchmark.active())ModelPartRenderService.pollRuntimeConfig();
+            if (!dev.alex.threadium.benchmark.ThreadiumBenchmark.active()) ModelPartRenderService.pollRuntimeConfig();
         });
         ThreadiumClient.LOGGER.info("Benchmark tick callback registered: true");
         ResourceManagerHelper.get(PackType.CLIENT_RESOURCES).registerReloadListener(new ReloadGenerationListener());
     }
 
-    public static long worldGeneration() { return WORLD_GENERATION.current(); }
-    public static long resourceGeneration() { return RESOURCE_GENERATION.current(); }
+    public static long worldGeneration() {
+        return WORLD_GENERATION.current();
+    }
+
+    public static long resourceGeneration() {
+        return RESOURCE_GENERATION.current();
+    }
 
     private static void advanceWorldGeneration(String reason) {
         long generation = WORLD_GENERATION.advance();
@@ -67,7 +72,10 @@ public final class ThreadiumLifecycle {
         if (!INITIALIZED.compareAndSet(true, false)) return;
         long worldGeneration = WORLD_GENERATION.advance();
         long resourceGeneration = RESOURCE_GENERATION.advance();
-        ThreadiumClient.LOGGER.info("Threadium client shutdown: worldGeneration={}, resourceGeneration={}", worldGeneration, resourceGeneration);
+        ThreadiumClient.LOGGER.info(
+                "Threadium client shutdown: worldGeneration={}, resourceGeneration={}",
+                worldGeneration,
+                resourceGeneration);
         ThreadiumPhasePipeline.shutdown();
         RetainedTextManager.invalidate("client shutdown");
         if (ModelPartRenderService.get() != null) ModelPartRenderService.get().close();
@@ -90,7 +98,8 @@ public final class ThreadiumLifecycle {
             long generation = RESOURCE_GENERATION.advance();
             ThreadiumPhasePipeline.invalidate("resource reload");
             RetainedTextManager.invalidate("resource reload");
-            if (ModelPartRenderService.get() != null) ModelPartRenderService.get().invalidate();
+            if (ModelPartRenderService.get() != null)
+                ModelPartRenderService.get().invalidate();
             dev.alex.threadium.benchmark.ThreadiumBenchmark.resourceReloaded();
             dev.alex.threadium.benchmark.PipelineDifferentialRunner.invalidate("resource reload");
             ThreadiumClient.LOGGER.info("Threadium resource reload completed: resourceGeneration={}", generation);

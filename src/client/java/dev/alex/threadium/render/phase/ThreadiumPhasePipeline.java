@@ -3,12 +3,6 @@ package dev.alex.threadium.render.phase;
 import dev.alex.threadium.ThreadiumClient;
 import dev.alex.threadium.config.ThreadiumConfig;
 import dev.alex.threadium.mixin.accessor.TranslucentFeatureRenderPhaseAccessor;
-import net.minecraft.client.renderer.SubmitNodeStorage;
-import net.minecraft.client.renderer.feature.phase.FeatureRenderPhase;
-import net.minecraft.client.renderer.feature.phase.TranslucentFeatureRenderPhase;
-import net.minecraft.client.renderer.feature.submit.SubmitNode;
-import net.minecraft.client.renderer.feature.submit.TranslucentSubmit;
-
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -18,6 +12,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import net.minecraft.client.renderer.SubmitNodeStorage;
+import net.minecraft.client.renderer.feature.phase.FeatureRenderPhase;
+import net.minecraft.client.renderer.feature.phase.TranslucentFeatureRenderPhase;
+import net.minecraft.client.renderer.feature.submit.SubmitNode;
+import net.minecraft.client.renderer.feature.submit.TranslucentSubmit;
 
 /** Render-thread capture/merge coordinator. Workers only see detached arrays. */
 public final class ThreadiumPhasePipeline {
@@ -31,7 +30,7 @@ public final class ThreadiumPhasePipeline {
     private static volatile ThreadiumConfig config;
     private static volatile ThreadiumPhaseScheduler scheduler;
 
-    private ThreadiumPhasePipeline() { }
+    private ThreadiumPhasePipeline() {}
 
     public static synchronized void initialize(ThreadiumConfig newConfig) {
         if (scheduler != null) return;
@@ -41,8 +40,13 @@ public final class ThreadiumPhasePipeline {
                 ? newConfig.workerCountOverride()
                 : Math.max(1, Math.min(4, (processors - 2) / 2));
         scheduler = new ThreadiumPhaseScheduler(workers, newConfig.phaseQueueCapacity());
-        ThreadiumClient.LOGGER.info("Threadium phase pipeline initialized: enabled={}, workers={}, queueCapacity={}, deadlineMicros={}, translucentThreshold={}",
-                newConfig.phasePipelineEnabled(), workers, newConfig.phaseQueueCapacity(), newConfig.phaseDeadlineMicros(), newConfig.minTranslucentSubmits());
+        ThreadiumClient.LOGGER.info(
+                "Threadium phase pipeline initialized: enabled={}, workers={}, queueCapacity={}, deadlineMicros={}, translucentThreshold={}",
+                newConfig.phasePipelineEnabled(),
+                workers,
+                newConfig.phaseQueueCapacity(),
+                newConfig.phaseDeadlineMicros(),
+                newConfig.minTranslucentSubmits());
     }
 
     public static void invalidate(String reason) {
@@ -61,7 +65,11 @@ public final class ThreadiumPhasePipeline {
     public static void drainAndPrepare(SubmitNodeStorage storage, Consumer<FeatureRenderPhase<?>> vanillaConsumer) {
         ThreadiumConfig currentConfig = config;
         ThreadiumPhaseScheduler currentScheduler = scheduler;
-        if (currentConfig == null || currentScheduler == null || !currentConfig.enabled() || !currentConfig.phasePipelineEnabled() || CIRCUIT_OPEN.get()) {
+        if (currentConfig == null
+                || currentScheduler == null
+                || !currentConfig.enabled()
+                || !currentConfig.phasePipelineEnabled()
+                || CIRCUIT_OPEN.get()) {
             storage.drainPhases(vanillaConsumer);
             return;
         }
@@ -81,7 +89,8 @@ public final class ThreadiumPhasePipeline {
                 List<TranslucentSubmit> liveSubmits = accessor.threadium$getSubmits();
                 SubmitNode[] submits = liveSubmits.toArray(new SubmitNode[0]);
                 float[] distances = accessor.threadium$getDistances().toFloatArray();
-                TranslucentPhaseSnapshot snapshot = new TranslucentPhaseSnapshot(generation, slot, epoch, submits, distances);
+                TranslucentPhaseSnapshot snapshot =
+                        new TranslucentPhaseSnapshot(generation, slot, epoch, submits, distances);
                 liveSubmits.clear();
                 accessor.threadium$getDistances().clear();
                 METRICS.snapshot.record(System.nanoTime() - captureStart);
@@ -105,12 +114,23 @@ public final class ThreadiumPhasePipeline {
         }
     }
 
-    private static PhaseEntry createTranslucentEntry(FeatureRenderPhase<?> phase, TranslucentPhaseSnapshot snapshot, long deadline,
-                                                       ThreadiumConfig currentConfig, ThreadiumPhaseScheduler currentScheduler) {
-        if (snapshot.size() < currentConfig.minTranslucentSubmits()) return new PhaseEntry(phase, snapshot, null, false);
+    private static PhaseEntry createTranslucentEntry(
+            FeatureRenderPhase<?> phase,
+            TranslucentPhaseSnapshot snapshot,
+            long deadline,
+            ThreadiumConfig currentConfig,
+            ThreadiumPhaseScheduler currentScheduler) {
+        if (snapshot.size() < currentConfig.minTranslucentSubmits())
+            return new PhaseEntry(phase, snapshot, null, false);
         long submitted = System.nanoTime();
-        PhaseTask<TranslucentPhaseSnapshot, TranslucentPhaseResult> task = new PhaseTask<>(snapshot.generation(), snapshot.phaseSlot(), submitted,
-                deadline, snapshot, value -> processAsync(value, submitted), ThreadiumPhasePipeline::observeCompletion);
+        PhaseTask<TranslucentPhaseSnapshot, TranslucentPhaseResult> task = new PhaseTask<>(
+                snapshot.generation(),
+                snapshot.phaseSlot(),
+                submitted,
+                deadline,
+                snapshot,
+                value -> processAsync(value, submitted),
+                ThreadiumPhasePipeline::observeCompletion);
         long submitStart = System.nanoTime();
         boolean accepted = currentScheduler.submit(task);
         METRICS.submission.record(System.nanoTime() - submitStart);
@@ -132,9 +152,11 @@ public final class ThreadiumPhasePipeline {
     private static TranslucentPhaseResult process(TranslucentPhaseSnapshot snapshot) {
         int[] order = snapshot.data().sortedIndices();
         SubmitNode[] ordered = new SubmitNode[order.length];
-        for (int index = 0; index < order.length; index++) ordered[index] = (SubmitNode) snapshot.data().opaqueReference(order[index]);
+        for (int index = 0; index < order.length; index++)
+            ordered[index] = (SubmitNode) snapshot.data().opaqueReference(order[index]);
         METRICS.resultSize.addAndGet(ordered.length);
-        return new TranslucentPhaseResult(snapshot.generation(), snapshot.phaseSlot(), snapshot.pipelineEpoch(), ordered);
+        return new TranslucentPhaseResult(
+                snapshot.generation(), snapshot.phaseSlot(), snapshot.pipelineEpoch(), ordered);
     }
 
     private static TranslucentPhaseResult resolve(PhaseEntry entry, long generation, long epoch, long deadline) {
@@ -173,8 +195,8 @@ public final class ThreadiumPhasePipeline {
 
     private static TranslucentPhaseResult takeCurrentResult(
             PhaseTask<TranslucentPhaseSnapshot, TranslucentPhaseResult> task, long generation, long epoch) {
-        return task.takeAsyncResult(generation,
-                result -> result.pipelineEpoch() == epoch && PIPELINE_EPOCH.get() == epoch);
+        return task.takeAsyncResult(
+                generation, result -> result.pipelineEpoch() == epoch && PIPELINE_EPOCH.get() == epoch);
     }
 
     public static void sortOrReplay(FeatureRenderPhase<?> phase, FeatureRenderPhase.Output output) {
@@ -195,17 +217,23 @@ public final class ThreadiumPhasePipeline {
         if (failure == null) return;
         METRICS.failures.incrementAndGet();
         int failures = CONSECUTIVE_FAILURES.incrementAndGet();
-        if (FAILURE_LOGGED.compareAndSet(false, true)) ThreadiumClient.LOGGER.error("Threadium phase worker failed; using synchronous fallback", failure);
+        if (FAILURE_LOGGED.compareAndSet(false, true))
+            ThreadiumClient.LOGGER.error("Threadium phase worker failed; using synchronous fallback", failure);
         if (failures >= config.maxConsecutiveFailures() && CIRCUIT_OPEN.compareAndSet(false, true)) {
-            ThreadiumClient.LOGGER.error("Threadium phase pipeline circuit breaker opened after {} consecutive failures", failures);
+            ThreadiumClient.LOGGER.error(
+                    "Threadium phase pipeline circuit breaker opened after {} consecutive failures", failures);
         }
     }
 
     public static String metricsSnapshot() {
         ThreadiumPhaseScheduler current = scheduler;
-        return METRICS.snapshotAndReset(current == null ? 0 : current.queueDepth(), current == null ? 0 : current.activeWorkers());
+        return METRICS.snapshotAndReset(
+                current == null ? 0 : current.queueDepth(), current == null ? 0 : current.activeWorkers());
     }
 
-    private record PhaseEntry(FeatureRenderPhase<?> phase, TranslucentPhaseSnapshot snapshot,
-                              PhaseTask<TranslucentPhaseSnapshot, TranslucentPhaseResult> task, boolean submitted) { }
+    private record PhaseEntry(
+            FeatureRenderPhase<?> phase,
+            TranslucentPhaseSnapshot snapshot,
+            PhaseTask<TranslucentPhaseSnapshot, TranslucentPhaseResult> task,
+            boolean submitted) {}
 }

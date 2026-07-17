@@ -10,6 +10,9 @@ public record PipelineValidity(PipelineValidityState state, long generation, Str
     }
 
     public PipelineValidity forGeneration(long currentGeneration) {
-        return generation == currentGeneration ? this : new PipelineValidity(PipelineValidityState.STALE, generation, "compiled for generation " + generation);
+        return generation == currentGeneration
+                ? this
+                : new PipelineValidity(
+                        PipelineValidityState.STALE, generation, "compiled for generation " + generation);
     }
 }

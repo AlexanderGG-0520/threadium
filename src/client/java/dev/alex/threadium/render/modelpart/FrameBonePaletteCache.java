@@ -86,8 +86,10 @@ final class FrameBonePaletteCache {
         int slot = mix(hash) & mask;
         while (table[slot] != 0) {
             int entry = table[slot] - 1;
-            if (hashes[entry] == hash && topologies[entry] == capturedTopology
-                    && lengths[entry] == capturedLength && exact(entry)) return palettes[entry];
+            if (hashes[entry] == hash
+                    && topologies[entry] == capturedTopology
+                    && lengths[entry] == capturedLength
+                    && exact(entry)) return palettes[entry];
             slot = (slot + 1) & mask;
         }
         return null;

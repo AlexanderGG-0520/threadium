@@ -5,7 +5,7 @@ import it.unimi.dsi.fastutil.ints.IntArrays;
 
 /** Exact 26.2 comparator and fastutil unstable-sort algorithm. */
 public final class TranslucentSorter {
-    private TranslucentSorter() { }
+    private TranslucentSorter() {}
 
     public static int[] sortIndices(float[] distances) {
         int[] indices = new int[distances.length];

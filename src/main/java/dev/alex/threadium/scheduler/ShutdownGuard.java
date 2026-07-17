@@ -6,6 +6,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class ShutdownGuard {
     private final AtomicBoolean shutdown = new AtomicBoolean();
 
-    public boolean beginShutdown() { return shutdown.compareAndSet(false, true); }
-    public boolean isShutdown() { return shutdown.get(); }
+    public boolean beginShutdown() {
+        return shutdown.compareAndSet(false, true);
+    }
+
+    public boolean isShutdown() {
+        return shutdown.get();
+    }
 }
