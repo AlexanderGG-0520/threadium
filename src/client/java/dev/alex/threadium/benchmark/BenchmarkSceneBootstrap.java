@@ -188,7 +188,9 @@ final class BenchmarkSceneBootstrap {
                     phase = Phase.SPAWN_ENTITIES;
                 }
                 case SPAWN_ENTITIES -> {
-                    message("[Threadium Benchmark] Bootstrap: spawning 256 cows...");
+                    message("[Threadium Benchmark] Bootstrap: spawning "
+                            + BenchmarkSceneSpec.STATIC.entityCount()
+                            + " cows...");
                     spawned = 0;
                     for (var placement : BenchmarkSceneSpec.STATIC.placements()) {
                         var created = BuiltInRegistries.ENTITY_TYPE
@@ -242,8 +244,14 @@ final class BenchmarkSceneBootstrap {
                     if (!markerValid()) throw new IOException("Written marker did not verify");
                     server.saveEverything(false, true, false);
                     phase = Phase.COMPLETE;
-                    String text = "[Threadium Benchmark] Bootstrap complete. owned=256, cows=256, "
-                            + "correctlyPlaced=256, duplicates=0, missing=0, sceneHash="
+                    int expected = BenchmarkSceneSpec.STATIC.entityCount();
+                    String text = "[Threadium Benchmark] Bootstrap complete. owned="
+                            + expected
+                            + ", cows="
+                            + expected
+                            + ", correctlyPlaced="
+                            + expected
+                            + ", duplicates=0, missing=0, sceneHash="
                             + BenchmarkSceneSpec.STATIC.hash();
                     message(text);
                     result.complete(text);

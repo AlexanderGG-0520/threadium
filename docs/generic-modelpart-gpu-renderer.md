@@ -20,6 +20,8 @@ The immutable mesh copies vanilla's expanded `Cube.polygons`: position (3 floats
 
 Vertices stay in their owning part's local space. Current accumulated matrices use vanilla's translation/16, ZYX rotation, scale, and parent-first composition. Each 112-byte bone record is a mat4 plus a std430-padded inverse-transpose mat3. Visibility is propagated through parents; `skipDraw` hides only the owning part geometry. Hidden bone matrices are zeroed before upload.
 
+Exact pose deduplication is frame-local and collision-verified. For each topology, the cache probes at most 16 consecutive misses before bypassing fingerprint capture and cache insertion for the rest of that frame. Any hit during the probe keeps exact deduplication active, and every new frame probes again, so static populations retain shared palettes while highly animated populations direct-pack their one-use palettes without carrying the bypass decision across frames.
+
 ## OpenGL backend and shaders
 
 `SelectingModelPartGpuBackend` initializes lazily on the Render Thread from the first intercepted model invocation after LWJGL capabilities exist. The old implementation returned from `ensureReady` while still `UNINITIALIZED` whenever `OpenGL45` was false; Minecraft's 3.3 context therefore silently rejected every invocation. Selection now performs one guarded attempt, logs the complete active-context feature projection, and transitions through `INITIALIZING` to either `READY` or `FAILED`.
@@ -38,7 +40,7 @@ The previous implementation uploaded and drew inside the queued-entry loop, forc
 
 `entity.gpu.batchConsolidation=true` enables consolidation. Setting it false produces singleton ranges through the identical buffer/shader path for A/B diagnostics. A runtime change closes the backend, clears pending groups, and reinitializes safely.
 
-Metrics report consolidated/singleton/multi-instance batches, maximum instances per draw, instances covered by multi-draws, group upload calls and bytes, plus `instancesPerDraw`, `drawReductionRatio`, and `multiInstanceCoverage` with zero-safe calculations.
+Metrics report consolidated/singleton/multi-instance batches, maximum instances per draw, instances covered by multi-draws, group upload calls and bytes, plus `instancesPerDraw`, `drawReductionRatio`, and `multiInstanceCoverage` with zero-safe calculations. These batching ratios use only batchable unsorted instance draws; sorted quad draws remain visible through separate `sortedInstances` and `sortedDrawCalls` counters and are still included in total `drawCalls`.
 
 Both backends capture and restore program, VAO, array buffer, texture units 0–3, blend/depth/cull enables, depth function/mask, front face, viewport, draw framebuffer, active texture, and projection UBO binding once per flush. Raw GL remains isolated in backend classes. State is `DISABLED`, `UNINITIALIZED`, `INITIALIZING`, `READY`, `ACTIVE`, or `FAILED`; only READY/ACTIVE accept work. Draw-time failure clears queued work, releases backend resources, and makes future invocations fall back, although already-suppressed geometry cannot be recovered in that frame.
 

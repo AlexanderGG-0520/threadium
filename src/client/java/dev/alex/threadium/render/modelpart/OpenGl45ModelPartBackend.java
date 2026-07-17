@@ -245,6 +245,10 @@ public final class OpenGl45ModelPartBackend implements ModelPartGpuBackend {
             return new FlushStats(
                     entryCount,
                     calls,
+                    entryCount,
+                    calls,
+                    0,
+                    0,
                     singletons,
                     multi,
                     max,

@@ -37,7 +37,7 @@ public final class ThreadiumLifecycle {
         RetainedTextManager.initialize(config);
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> advanceWorldGeneration("world join"));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> advanceWorldGeneration("world disconnect"));
-        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> shutdown());
+        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> shutdown(client));
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             dev.alex.threadium.benchmark.ThreadiumBenchmark.tick(client);
             dev.alex.threadium.benchmark.PipelineDifferentialRunner.tick();
@@ -68,8 +68,9 @@ public final class ThreadiumLifecycle {
         ThreadiumClient.LOGGER.info("Threadium {}: worldGeneration={}", reason, generation);
     }
 
-    private static synchronized void shutdown() {
+    private static synchronized void shutdown(net.minecraft.client.Minecraft client) {
         if (!INITIALIZED.compareAndSet(true, false)) return;
+        dev.alex.threadium.benchmark.ThreadiumBenchmark.shutdown(client);
         long worldGeneration = WORLD_GENERATION.advance();
         long resourceGeneration = RESOURCE_GENERATION.advance();
         ThreadiumClient.LOGGER.info(

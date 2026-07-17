@@ -59,14 +59,63 @@ class FrameBonePaletteCacheTest {
     }
 
     @Test
-    void distinctPopulationCreates256Palettes() {
+    void distinctPopulationBypassesAfterBoundedProbes() {
+        Fixture fixture = fixture();
+        int lookups = 0;
+        int directPacked = 0;
+        for (int i = 0; i < 256; i++) {
+            fixture.part.x = i;
+            assertNull(fixture.cache.find(fixture.topology));
+            if (fixture.cache.lastLookupPerformed()) lookups++;
+            if (!fixture.cache.store(palette(i))) directPacked++;
+        }
+        assertEquals(FrameBonePaletteCache.MISS_PROBE_LIMIT, lookups);
+        assertEquals(FrameBonePaletteCache.MISS_PROBE_LIMIT - 1, fixture.cache.size());
+        assertEquals(256 - FrameBonePaletteCache.MISS_PROBE_LIMIT + 1, directPacked);
+    }
+
+    @Test
+    void newFrameReprobesAndRecoversImmediateReuse() {
         Fixture fixture = fixture();
         for (int i = 0; i < 256; i++) {
             fixture.part.x = i;
             assertNull(fixture.cache.find(fixture.topology));
             fixture.cache.store(palette(i));
         }
-        assertEquals(256, fixture.cache.size());
+
+        fixture.cache.beginFrame();
+        fixture.part.x = 7;
+        assertNull(fixture.cache.find(fixture.topology));
+        ModelPartBoneData shared = palette(7);
+        assertTrue(fixture.cache.store(shared));
+        assertSame(shared, fixture.cache.find(fixture.topology));
+        assertTrue(fixture.cache.lastLookupPerformed());
+
+        for (int i = 0; i < 256; i++) {
+            fixture.part.x = 1000 + i;
+            assertNull(fixture.cache.find(fixture.topology));
+            assertTrue(fixture.cache.lastLookupPerformed());
+            assertTrue(fixture.cache.store(palette(i)));
+        }
+    }
+
+    @Test
+    void bypassIsScopedToOneTopology() {
+        Fixture fixture = fixture();
+        for (int i = 0; i < 256; i++) {
+            fixture.part.x = i;
+            assertNull(fixture.cache.find(fixture.topology));
+            fixture.cache.store(palette(i));
+        }
+
+        ModelPart secondPart = new ModelPart(List.of(), Map.of());
+        GenericModelPartTopology secondTopology = new GenericModelPartTopology(
+                List.of(new GenericModelPartTopology.Node(secondPart, -1, 0, "root")),
+                new GenericModelPartTopology.StructuralKey(2, List.of(2L)));
+        assertNull(fixture.cache.find(secondTopology));
+        ModelPartBoneData shared = palette(2);
+        assertTrue(fixture.cache.store(shared));
+        assertSame(shared, fixture.cache.find(secondTopology));
     }
 
     @Test

@@ -44,6 +44,10 @@ public interface ModelPartGpuBackend extends AutoCloseable {
     record FlushStats(
             int instances,
             int drawCalls,
+            int batchableInstances,
+            int batchableDrawCalls,
+            int sortedInstances,
+            int sortedDrawCalls,
             int singletonBatches,
             int multiInstanceBatches,
             int maximumInstancesPerDraw,
@@ -52,7 +56,7 @@ public interface ModelPartGpuBackend extends AutoCloseable {
             int boneUploadCalls,
             long instanceBytes,
             long boneBytes) {
-        public static final FlushStats EMPTY = new FlushStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        public static final FlushStats EMPTY = new FlushStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     record MeshHandle(int vao, int vbo, int ibo, int indexCount, int boneCount, long bytes) {}

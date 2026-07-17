@@ -31,6 +31,8 @@ public final class BenchmarkTrialValidator {
         if (c.submissionFailures > 0) reasons.add("Blaze3D submission failures");
         if (c.rawProductionDrawCalls > 0) reasons.add("raw production draws");
         if (c.queuedInstances != c.drawnInstances) reasons.add("queued/drawn mismatch");
+        if (c.batchableInstances + c.sortedInstances != c.drawnInstances
+                || c.batchableDrawCalls + c.sortedDrawCalls != c.drawCalls) reasons.add("draw scope mismatch");
         if (c.accepted != c.suppressions) reasons.add("accepted/suppression mismatch");
         if (c.fallbacks > 0) reasons.add("unexpected fallback");
         if (c.pipelineInvalid > 0) reasons.add("invalid pipeline");
@@ -47,9 +49,9 @@ public final class BenchmarkTrialValidator {
             if (mode == ModelPartBenchmarkMode.SINGLETON
                     && (c.multiInstanceBatches != 0
                             || c.maximumInstancesPerDraw != 1
-                            || c.drawCalls != c.drawnInstances)) reasons.add("SINGLETON draw invariant");
+                            || c.batchableDrawCalls != c.batchableInstances)) reasons.add("SINGLETON draw invariant");
             if (mode == ModelPartBenchmarkMode.BATCHING
-                    && (c.drawCalls >= c.drawnInstances
+                    && (c.batchableDrawCalls >= c.batchableInstances
                             || c.multiInstanceBatches <= 0
                             || c.maximumInstancesPerDraw <= 1)) reasons.add("BATCHING draw invariant");
         }
@@ -62,6 +64,10 @@ public final class BenchmarkTrialValidator {
             long queuedInstances,
             long drawnInstances,
             long drawCalls,
+            long batchableInstances,
+            long batchableDrawCalls,
+            long sortedInstances,
+            long sortedDrawCalls,
             long multiInstanceBatches,
             long maximumInstancesPerDraw,
             long backendFailures,

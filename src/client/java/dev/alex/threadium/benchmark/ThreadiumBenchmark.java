@@ -48,9 +48,13 @@ public final class ThreadiumBenchmark {
             stableWorld = true,
             stableEntities = true,
             stableResolution = true,
+            stableAnimation = true,
             tickProgressConfirmed,
             validationPending;
+    private long animationTicks;
+    private int lastAnimatedEntities;
     private final CompletionNotificationGuard completionGuard = new CompletionNotificationGuard();
+    private final BenchmarkInactivityFpsOverride inactivityFpsOverride = new BenchmarkInactivityFpsOverride();
     private ThreadiumMetrics metrics;
     private String abortReason, finalStatus, resultPath, lastStartRejection;
     private BenchmarkPopulationSnapshot.Server lastServerPopulation;
@@ -83,9 +87,10 @@ public final class ThreadiumBenchmark {
                 "Renderer metrics source: {}", mode == ModelPartBenchmarkMode.VANILLA ? "NO_OP" : "MODEL_PART_SERVICE");
         ThreadiumClient.LOGGER.info(
                 "Threadium benchmark configured and idle: mode={}, scene={}, "
-                        + "trial={}; use /threadium benchmark start",
+                        + "entities={}, trial={}; use /threadium benchmark start",
                 mode,
                 current.scene,
+                BenchmarkSceneSpec.STATIC.entityCount(),
                 current.trial);
     }
 
@@ -109,6 +114,13 @@ public final class ThreadiumBenchmark {
 
     public static void resourceReloaded() {
         if (trialActive()) current.stableWorld = false;
+    }
+
+    public static void shutdown(Minecraft client) {
+        if (current != null) {
+            current.restoreAnimatedScene(client);
+            current.restoreInactivityFpsLimit(client, "client shutdown");
+        }
     }
 
     public static String start(Minecraft client) {
@@ -158,7 +170,8 @@ public final class ThreadiumBenchmark {
     private String beginStartValidation(Minecraft client) {
         ThreadiumClient.LOGGER.info("Current phase: {}", phase);
         if (validationPending) return rejectStart("another start validation is pending");
-        if (!scene.equals("static")) return rejectStart("benchmark scene is not implemented: " + scene);
+        if (!scene.equals("static") && !scene.equals("animated"))
+            return rejectStart("benchmark scene is not implemented: " + scene);
         if (phase != BenchmarkLifecyclePolicy.Phase.IDLE)
             return rejectStart("trial already active or completed: " + phase);
         if (client.level == null) return rejectStart("no client world");
@@ -203,8 +216,14 @@ public final class ThreadiumBenchmark {
             return;
         }
         ThreadiumClient.LOGGER.info("Scene validation: PASS");
-        captureConditions(client);
         resetValidation();
+        String inactivityRejection = applyInactivityFpsLimitOverride(client);
+        if (inactivityRejection != null) {
+            rejectStart(inactivityRejection);
+            chat(client, "[Threadium Benchmark] Start rejected: " + inactivityRejection);
+            return;
+        }
+        captureConditions(client);
         newSamples();
         resetMetrics();
         BenchmarkLifecyclePolicy.Phase previous = phase;
@@ -214,7 +233,13 @@ public final class ThreadiumBenchmark {
         tickProgressConfirmed = false;
         lastStartRejection = null;
         enforceTransform(client);
+        updateAnimatedScene(client);
         chat(client, "[Threadium Benchmark] Start accepted. Entering SETUP.");
+        chat(
+                client,
+                "[Threadium Benchmark] Inactivity FPS limit temporarily forced to MINIMIZED; original="
+                        + inactivityFpsOverride.originalName()
+                        + ".");
         chat(client, "[Threadium Benchmark] Setup started. Keep the game focused.");
         ThreadiumClient.LOGGER.info("Transition: {} -> {}", previous, phase);
     }
@@ -259,7 +284,9 @@ public final class ThreadiumBenchmark {
             return;
         }
         if (!BenchmarkLifecyclePolicy.cameraLocked(phase) || client.level == null || client.player == null) return;
+        inactivityFpsOverride.observe(() -> client.options.inactivityFpsLimit().get());
         enforceTransform(client);
+        updateAnimatedScene(client);
         if (phase == BenchmarkLifecyclePolicy.Phase.SETUP && now - phaseStart >= setupNanos)
             transition(BenchmarkLifecyclePolicy.Phase.WARMUP, now, client);
         else if (phase == BenchmarkLifecyclePolicy.Phase.WARMUP && now - phaseStart >= warmupNanos)
@@ -277,7 +304,10 @@ public final class ThreadiumBenchmark {
                 && now - phaseStart > 2_000_000_000L
                 && tickCount == startTickCount) {
             phase = BenchmarkLifecyclePolicy.Phase.IDLE;
+            restoreAnimatedScene(client);
             lastStartRejection = "Benchmark lifecycle is not receiving client ticks.";
+            if (!restoreInactivityFpsLimit(client, "missing client ticks"))
+                lastStartRejection += " Inactivity FPS limit restoration failed.";
             chat(client, "[Threadium Benchmark] " + lastStartRejection);
             ThreadiumClient.LOGGER.error(lastStartRejection);
             return;
@@ -340,7 +370,57 @@ public final class ThreadiumBenchmark {
         stableWorld = true;
         stableEntities = true;
         stableResolution = true;
+        stableAnimation = true;
+        animationTicks = 0;
+        lastAnimatedEntities = 0;
         abortReason = null;
+    }
+
+    private String applyInactivityFpsLimitOverride(Minecraft client) {
+        try {
+            boolean applied = inactivityFpsOverride.apply(
+                    () -> client.options.inactivityFpsLimit().get(),
+                    value -> client.options.inactivityFpsLimit().set(value));
+            if (!applied) return "could not force inactivity FPS limit to MINIMIZED";
+            ThreadiumClient.LOGGER.info(
+                    "Benchmark inactivity FPS limit override: original={}, effective={}",
+                    inactivityFpsOverride.originalName(),
+                    inactivityFpsOverride.effectiveName());
+            return null;
+        } catch (RuntimeException | Error failure) {
+            ThreadiumClient.LOGGER.error("Could not apply benchmark inactivity FPS limit override", failure);
+            return "could not apply inactivity FPS limit override: " + failure;
+        }
+    }
+
+    private boolean restoreInactivityFpsLimit(Minecraft client, String reason) {
+        try {
+            boolean restored = inactivityFpsOverride.restore(
+                    () -> client.options.inactivityFpsLimit().get(),
+                    value -> client.options.inactivityFpsLimit().set(value));
+            if (inactivityFpsOverride.captured())
+                ThreadiumClient.LOGGER.info(
+                        "Benchmark inactivity FPS limit restoration: reason={}, original={}, restored={}",
+                        reason,
+                        inactivityFpsOverride.originalName(),
+                        restored);
+            return restored;
+        } catch (RuntimeException | Error failure) {
+            ThreadiumClient.LOGGER.error("Could not restore benchmark inactivity FPS limit after " + reason, failure);
+            return false;
+        }
+    }
+
+    private void updateAnimatedScene(Minecraft client) {
+        if (!scene.equals("animated")) return;
+        lastAnimatedEntities = BenchmarkAnimatedCowPose.apply(client, tickCount);
+        animationTicks++;
+        if (phase == BenchmarkLifecyclePolicy.Phase.MEASUREMENT)
+            stableAnimation &= lastAnimatedEntities == BenchmarkSceneSpec.STATIC.entityCount();
+    }
+
+    private void restoreAnimatedScene(Minecraft client) {
+        if (scene.equals("animated")) BenchmarkAnimatedCowPose.restore(client);
     }
 
     private void enforceTransform(Minecraft client) {
@@ -417,6 +497,12 @@ public final class ThreadiumBenchmark {
         ModelPartRenderService service = ModelPartRenderService.get();
         var model =
                 service == null ? ModelPartRenderService.BenchmarkMetrics.zero() : service.benchmarkSnapshotAndReset();
+        var flushTimings = service == null
+                ? ModelPartRenderService.Blaze3dFlushTimings.zero()
+                : service.benchmarkFlushTimingsSnapshotAndReset();
+        var interceptTimings = service == null
+                ? ModelPartRenderService.InterceptTimings.zero()
+                : service.benchmarkInterceptTimingsSnapshotAndReset();
         var diagnostics = service == null
                 ? BoundedFallbackDiagnostics.Snapshot.empty()
                 : service.benchmarkFallbackDiagnosticsAndReset();
@@ -428,6 +514,10 @@ public final class ThreadiumBenchmark {
                     model.queuedInstances(),
                     model.drawnInstances(),
                     model.drawCalls(),
+                    model.batchableInstances(),
+                    model.batchableDrawCalls(),
+                    model.sortedInstances(),
+                    model.sortedDrawCalls(),
                     model.multiInstanceBatches(),
                     model.maximumInstancesPerDraw(),
                     model.backendFailures(),
@@ -451,7 +541,13 @@ public final class ThreadiumBenchmark {
                     samples.size()));
             if (client.options.enableVsync().get()) reasons.add("VSync enabled");
             if (client.options.framerateLimit().get() < 260) reasons.add("FPS limit below 260");
+            if (!inactivityFpsOverride.stable()) reasons.add("inactivity FPS limit changed during trial");
+            if (scene.equals("animated") && (!stableAnimation || animationTicks == 0))
+                reasons.add("animated scene pose updates were incomplete");
         }
+        restoreAnimatedScene(client);
+        if (!restoreInactivityFpsLimit(client, requestedStatus.toLowerCase(java.util.Locale.ROOT)))
+            reasons.add("inactivity FPS limit restoration failed");
         finalStatus = requestedStatus.equals("ABORTED") ? "ABORTED" : reasons.isEmpty() ? "VALID" : "INVALID";
         phase = finalStatus.equals("ABORTED")
                 ? BenchmarkLifecyclePolicy.Phase.ABORTED
@@ -462,6 +558,8 @@ public final class ThreadiumBenchmark {
                 timing,
                 staged,
                 model,
+                flushTimings,
+                interceptTimings,
                 diagnostics,
                 finalStatus,
                 List.copyOf(reasons));
@@ -482,6 +580,8 @@ public final class ThreadiumBenchmark {
         ModelPartRenderService service = ModelPartRenderService.get();
         if (service != null) {
             service.benchmarkSnapshotAndReset();
+            service.benchmarkFlushTimingsSnapshotAndReset();
+            service.benchmarkInterceptTimingsSnapshotAndReset();
             service.benchmarkFallbackDiagnosticsAndReset();
         }
     }
@@ -510,6 +610,14 @@ public final class ThreadiumBenchmark {
                         + (finalStatus == null ? "pending" : finalStatus),
                 "Camera locked: " + BenchmarkLifecyclePolicy.cameraLocked(phase),
                 "Validation pending: " + validationPending,
+                "inactivityFpsLimitOriginal=" + inactivityFpsOverride.originalName()
+                        + ", effective=" + inactivityFpsOverride.effectiveName()
+                        + ", stable=" + inactivityFpsOverride.stable()
+                        + ", restored=" + inactivityFpsOverride.restored(),
+                "animationProfile=" + (scene.equals("animated") ? BenchmarkAnimatedCowPose.PROFILE : "none")
+                        + ", animationTicks=" + animationTicks
+                        + ", lastAnimatedEntities=" + lastAnimatedEntities
+                        + ", stable=" + stableAnimation,
                 "elapsedSeconds=" + elapsed / 1_000_000_000.0 + ", remainingSeconds="
                         + Math.max(0, duration - elapsed) / 1_000_000_000.0,
                 "world=" + BenchmarkSceneSpec.STATIC.worldIdentifier() + ", sceneVersion="
@@ -625,6 +733,8 @@ public final class ThreadiumBenchmark {
             ThreadiumMetrics.BenchmarkTiming timing,
             StagedVertexMetrics.BenchmarkTiming staged,
             ModelPartRenderService.BenchmarkMetrics model,
+            ModelPartRenderService.Blaze3dFlushTimings flushTimings,
+            ModelPartRenderService.InterceptTimings interceptTimings,
             BoundedFallbackDiagnostics.Snapshot diagnostics,
             String status,
             List<String> reasons)
@@ -660,6 +770,10 @@ public final class ThreadiumBenchmark {
                 + field("status", status) + field("invalidReasons", reasons)
                 + field("abortReason", abortReason) + field("mode", mode.name())
                 + field("scene", scene) + field("trial", trial)
+                + field("animationProfile", scene.equals("animated") ? BenchmarkAnimatedCowPose.PROFILE : "none")
+                + field("animationTicks", animationTicks)
+                + field("animatedEntitiesPerTick", lastAnimatedEntities)
+                + field("animatedSceneStable", stableAnimation)
                 + field("phaseCompletionState", phase.name())
                 + field("benchmarkWorldIdentifier", BenchmarkSceneSpec.STATIC.worldIdentifier())
                 + field("benchmarkSceneVersion", BenchmarkSceneSpec.STATIC.version())
@@ -695,6 +809,10 @@ public final class ThreadiumBenchmark {
                 + field("queuedInstances", model.queuedInstances())
                 + field("drawnInstances", model.drawnInstances())
                 + field("drawCalls", model.drawCalls())
+                + field("batchableInstances", model.batchableInstances())
+                + field("batchableDrawCalls", model.batchableDrawCalls())
+                + field("sortedInstances", model.sortedInstances())
+                + field("sortedDrawCalls", model.sortedDrawCalls())
                 + field("multiInstanceBatches", model.multiInstanceBatches())
                 + field("maximumInstancesPerDraw", model.maximumInstancesPerDraw())
                 + field("instancesPerDraw", model.instancesPerDraw())
@@ -709,6 +827,8 @@ public final class ThreadiumBenchmark {
                 + field("posePaletteLookups", model.posePaletteLookups())
                 + field("posePaletteHits", model.posePaletteHits())
                 + field("posePaletteMisses", model.posePaletteMisses())
+                + field("posePaletteBypasses", model.posePaletteBypasses())
+                + field("directPackedPosePalettes", model.directPackedPosePalettes())
                 + field("uniqueBonePalettes", model.uniqueBonePalettes())
                 + field("reusedBonePalettes", model.reusedBonePalettes())
                 + field("boneMatricesComposed", model.boneMatricesComposed())
@@ -718,6 +838,49 @@ public final class ThreadiumBenchmark {
                 + field("poseLookupNanos", model.poseLookupNanos())
                 + field("boneCompositionNanos", model.boneCompositionNanos())
                 + field("bonePackingNanos", model.bonePackingNanos())
+                + timingFields("flush", flushTimings.count(), flushTimings.flushTotalNanos(), stats.sampleCount())
+                + timingFields(
+                        "boneAndInstancePacking",
+                        flushTimings.count(),
+                        flushTimings.boneAndInstancePackingNanos(),
+                        stats.sampleCount())
+                + timingFields("boneUpload", flushTimings.count(), flushTimings.boneUploadNanos(), stats.sampleCount())
+                + timingFields(
+                        "instanceUpload", flushTimings.count(), flushTimings.instanceUploadNanos(), stats.sampleCount())
+                + timingFields(
+                        "drawPlanning", flushTimings.count(), flushTimings.drawPlanningNanos(), stats.sampleCount())
+                + timingFields(
+                        "drawSubmission", flushTimings.count(), flushTimings.drawSubmissionNanos(), stats.sampleCount())
+                + instanceTimingFields(
+                        "intercept",
+                        interceptTimings.count(),
+                        interceptTimings.interceptTotalNanos(),
+                        stats.sampleCount())
+                + instanceTimingFields(
+                        "pipelineValidation",
+                        interceptTimings.count(),
+                        interceptTimings.pipelineValidationNanos(),
+                        stats.sampleCount())
+                + instanceTimingFields(
+                        "topologyAndMeshLookup",
+                        interceptTimings.count(),
+                        interceptTimings.topologyAndMeshLookupNanos(),
+                        stats.sampleCount())
+                + instanceTimingFields(
+                        "posePreparation",
+                        interceptTimings.count(),
+                        interceptTimings.posePreparationNanos(),
+                        stats.sampleCount())
+                + instanceTimingFields(
+                        "materialCapture",
+                        interceptTimings.count(),
+                        interceptTimings.materialCaptureNanos(),
+                        stats.sampleCount())
+                + instanceTimingFields(
+                        "backendQueue",
+                        interceptTimings.count(),
+                        interceptTimings.backendQueueNanos(),
+                        stats.sampleCount())
                 + field("backendFailures", model.backendFailures())
                 + field("blaze3dSubmissionFailures", model.blaze3dSubmissionFailures())
                 + field("rawProductionDrawCalls", model.rawProductionDrawCalls())
@@ -727,6 +890,10 @@ public final class ThreadiumBenchmark {
                 + field("fov", client.options.fov().get())
                 + field("vsync", client.options.enableVsync().get())
                 + field("fpsLimit", client.options.framerateLimit().get())
+                + field("inactivityFpsLimitOriginal", inactivityFpsOverride.originalName())
+                + field("inactivityFpsLimitEffective", inactivityFpsOverride.effectiveName())
+                + field("inactivityFpsLimitStable", inactivityFpsOverride.stable())
+                + field("inactivityFpsLimitRestored", inactivityFpsOverride.restored())
                 + field("capturedPlayerTransform", List.of(playerX, playerY, playerZ, playerYaw, playerPitch))
                 + lastField("capturedCameraTransform", List.of(playerX, playerY, playerZ, playerYaw, playerPitch))
                 + "}\n";
@@ -749,6 +916,18 @@ public final class ThreadiumBenchmark {
 
     private static long seconds(String key, int fallback) {
         return Math.multiplyExact(integer(key, fallback, 0, 3600), 1_000_000_000L);
+    }
+
+    private static String timingFields(String name, long count, long totalNanos, long frameCount) {
+        return field(name + "Count", count)
+                + field(name + "TotalNanos", totalNanos)
+                + field(name + "AverageNanos", count == 0 ? 0d : (double) totalNanos / count)
+                + field(name + "NanosPerFrame", frameCount == 0 ? 0d : (double) totalNanos / frameCount);
+    }
+
+    private static String instanceTimingFields(String name, long count, long totalNanos, long frameCount) {
+        return timingFields(name, count, totalNanos, frameCount)
+                + field(name + "NanosPerInstance", count == 0 ? 0d : (double) totalNanos / count);
     }
 
     private static String field(String key, Object value) {

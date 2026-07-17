@@ -8,7 +8,18 @@ from pathlib import Path
 METRICS = [
     "averageFps", "onePercentLowFps", "averageFrameNanos", "p95FrameNanos", "p99FrameNanos",
     "worldRenderAverageNanos", "featurePreparationAverageNanos", "groupPreparationAverageNanos",
-    "drawCalls", "instancesPerDraw", "drawReductionRatio", "boneBytesUploaded", "instanceBytesUploaded",
+    "drawCalls", "batchableDrawCalls", "sortedDrawCalls", "instancesPerDraw", "drawReductionRatio",
+    "boneBytesUploaded", "instanceBytesUploaded",
+    "flushAverageNanos", "flushNanosPerFrame",
+    "boneAndInstancePackingAverageNanos", "boneAndInstancePackingNanosPerFrame",
+    "boneUploadAverageNanos", "boneUploadNanosPerFrame", "instanceUploadAverageNanos", "instanceUploadNanosPerFrame",
+    "drawPlanningAverageNanos", "drawPlanningNanosPerFrame", "drawSubmissionAverageNanos", "drawSubmissionNanosPerFrame",
+    "interceptAverageNanos", "interceptNanosPerFrame", "interceptNanosPerInstance",
+    "pipelineValidationAverageNanos", "pipelineValidationNanosPerFrame", "pipelineValidationNanosPerInstance",
+    "topologyAndMeshLookupAverageNanos", "topologyAndMeshLookupNanosPerFrame", "topologyAndMeshLookupNanosPerInstance",
+    "posePreparationAverageNanos", "posePreparationNanosPerFrame", "posePreparationNanosPerInstance",
+    "materialCaptureAverageNanos", "materialCaptureNanosPerFrame", "materialCaptureNanosPerInstance",
+    "backendQueueAverageNanos", "backendQueueNanosPerFrame", "backendQueueNanosPerInstance",
 ]
 
 def summarize(values):

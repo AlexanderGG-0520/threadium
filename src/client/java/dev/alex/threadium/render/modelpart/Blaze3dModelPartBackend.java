@@ -55,6 +55,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
             .build();
     private static final AtomicInteger TOKENS = new AtomicInteger();
     private static final List<RenderPipeline> SOURCES = ModelPartPipelineDescriptor.SOURCES;
+    private static final boolean PROFILE_FLUSH = Boolean.getBoolean("threadium.modelpart.profileFlush");
     private final BackendStateMachine states = new BackendStateMachine(ModelPartBackendState.UNINITIALIZED);
     private final int maxInstances, maxBones;
     private final boolean consolidate;
@@ -429,6 +430,9 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
         Group group = groups.isEmpty() ? new Group(queued.size(), false) : groups.removeFirst();
         int entryCount = group.count;
         if (!state().accepts() || entryCount == 0) return FlushStats.EMPTY;
+        long flushStart = profileStart();
+        long packingNanos = 0, boneUploadNanos = 0, instanceUploadNanos = 0;
+        long drawPlanningNanos = 0, drawSubmissionNanos = 0;
         try {
             ByteBuffer instances =
                     instanceStaging.clear().limit(ModelPartLayouts.bytes(entryCount, ModelPartLayouts.INSTANCE_STRIDE));
@@ -443,10 +447,14 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                             boneStaging.clear().limit(ModelPartLayouts.bytes(boneCount, ModelPartLayouts.BONE_STRIDE));
                     long packingStart = System.nanoTime();
                     putBones(bones, q.bones);
-                    metrics.bonePackingNanos.add(System.nanoTime() - packingStart);
+                    long bonePackingNanos = System.nanoTime() - packingStart;
+                    metrics.bonePackingNanos.add(bonePackingNanos);
+                    if (PROFILE_FLUSH) packingNanos += bonePackingNanos;
                     bones.flip();
+                    long uploadStart = profileStart();
                     encoder.writeToBuffer(
                             boneBuffer.slice((long) boneBase * ModelPartLayouts.BONE_STRIDE, bones.remaining()), bones);
+                    boneUploadNanos += profileElapsed(uploadStart);
                     uploadedFramePalettes.put(q.bones, Boolean.TRUE);
                     uploadedBones = Math.addExact(uploadedBones, boneCount);
                     boneUploadCalls++;
@@ -459,19 +467,27 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                             decalBuffer.slice((long) q.decalBase * ModelPartLayouts.BONE_STRIDE, decal.remaining()),
                             decal);
                 }
+                long instancePackingStart = profileStart();
                 putInstance(instances, q, boneBase);
+                packingNanos += profileElapsed(instancePackingStart);
             }
             instances.flip();
             GpuBufferSlice uploadedInstances = instanceBuffer.slice(0, instances.remaining());
+            long instanceUploadStart = profileStart();
             encoder.writeToBuffer(uploadedInstances, instances);
+            instanceUploadNanos = profileElapsed(instanceUploadStart);
+            long drawPlanningStart = profileStart();
             ArrayList<PlannedDraw> plans = planDraws(entryCount, group.strictlyOrdered);
-            int calls = 0, singletons = 0, multi = 0, maximum = 0, multiInstances = 0;
+            drawPlanningNanos = profileElapsed(drawPlanningStart);
+            int calls = 0, batchableInstances = 0, batchableCalls = 0, sortedInstances = 0, sortedCalls = 0;
+            int singletons = 0, multi = 0, maximum = 0, multiInstances = 0;
+            long drawSubmissionStart = profileStart();
             for (PlannedDraw plan : plans) {
                 if (plan.sorted) {
-                    int sortedCalls = submitSorted(encoder, plan, uploadedInstances);
-                    calls += sortedCalls;
-                    singletons += sortedCalls;
-                    maximum = Math.max(maximum, 1);
+                    int planSortedCalls = submitSorted(encoder, plan, uploadedInstances);
+                    calls += planSortedCalls;
+                    sortedInstances += plan.instances.size();
+                    sortedCalls += planSortedCalls;
                 } else {
                     for (int at = 0; at < plan.instances.size(); ) {
                         int firstIndex = plan.instances.get(at), end = at + 1;
@@ -485,6 +501,8 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                         GpuBufferSlice batchInstances = instanceSlice(uploadedInstances, firstIndex, count);
                         submit(encoder, q, batchInstances, count);
                         calls++;
+                        batchableCalls++;
+                        batchableInstances += count;
                         maximum = Math.max(maximum, count);
                         if (count == 1) singletons++;
                         else {
@@ -495,12 +513,25 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                     }
                 }
             }
+            drawSubmissionNanos = profileElapsed(drawSubmissionStart);
             queued.subList(0, entryCount).clear();
             if (state() == ModelPartBackendState.READY)
                 states.transition(ModelPartBackendState.READY, ModelPartBackendState.ACTIVE);
+            if (PROFILE_FLUSH)
+                metrics.recordBlaze3dFlushTiming(
+                        profileElapsed(flushStart),
+                        packingNanos,
+                        boneUploadNanos,
+                        instanceUploadNanos,
+                        drawPlanningNanos,
+                        drawSubmissionNanos);
             return new FlushStats(
                     entryCount,
                     calls,
+                    batchableInstances,
+                    batchableCalls,
+                    sortedInstances,
+                    sortedCalls,
                     singletons,
                     multi,
                     maximum,
@@ -515,6 +546,14 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
             fail();
             return FlushStats.EMPTY;
         }
+    }
+
+    private static long profileStart() {
+        return PROFILE_FLUSH ? System.nanoTime() : 0L;
+    }
+
+    private static long profileElapsed(long start) {
+        return PROFILE_FLUSH ? System.nanoTime() - start : 0L;
     }
 
     private ArrayList<PlannedDraw> planDraws(int entryCount, boolean strictlyOrdered) {

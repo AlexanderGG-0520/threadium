@@ -1,9 +1,13 @@
 package dev.alex.threadium.render.modelpart;
 
 import java.util.Arrays;
+import java.util.IdentityHashMap;
 
 /** Render-thread-owned exact pose cache. Palette objects are valid for one frame only. */
 final class FrameBonePaletteCache {
+    static final int MISS_PROBE_LIMIT = 16;
+
+    private final IdentityHashMap<GenericModelPartTopology, ReuseProbe> reuseProbes = new IdentityHashMap<>();
     private int[] table = new int[16];
     private long[] hashes = new long[8];
     private GenericModelPartTopology[] topologies = new GenericModelPartTopology[8];
@@ -14,22 +18,56 @@ final class FrameBonePaletteCache {
     private int[] scratch = new int[128];
     private int entries;
     private int storedCount;
+    private GenericModelPartTopology recentProbeTopology;
+    private ReuseProbe recentProbe;
     private long capturedHash;
     private GenericModelPartTopology capturedTopology;
     private int capturedLength;
+    private boolean lastLookupPerformed;
+    private boolean capturedForStore;
 
     ModelPartBoneData find(GenericModelPartTopology topology) {
+        ReuseProbe probe = probe(topology);
+        if (probe.bypass) return bypassLookup();
         capture(topology);
-        return findCaptured(capturedHash);
+        return finishLookup(probe, capturedHash);
     }
 
     ModelPartBoneData findWithHashForTest(GenericModelPartTopology topology, long hash) {
+        ReuseProbe probe = probe(topology);
+        if (probe.bypass) return bypassLookup();
         capture(topology);
         capturedHash = hash;
-        return findCaptured(hash);
+        return finishLookup(probe, hash);
     }
 
-    void store(ModelPartBoneData palette) {
+    private ModelPartBoneData bypassLookup() {
+        lastLookupPerformed = false;
+        capturedForStore = false;
+        return null;
+    }
+
+    private ModelPartBoneData finishLookup(ReuseProbe probe, long hash) {
+        lastLookupPerformed = true;
+        ModelPartBoneData found = findCaptured(hash);
+        if (found != null) {
+            probe.reuseConfirmed = true;
+            capturedForStore = false;
+            return found;
+        }
+        probe.misses++;
+        // A confirmed hit keeps exact dedup active. Otherwise bound unique-pose probing per frame.
+        capturedForStore = probe.reuseConfirmed || probe.misses < MISS_PROBE_LIMIT;
+        if (!capturedForStore) probe.bypass = true;
+        return null;
+    }
+
+    boolean lastLookupPerformed() {
+        return lastLookupPerformed;
+    }
+
+    boolean store(ModelPartBoneData palette) {
+        if (!capturedForStore) return false;
         if ((entries + 1) * 2 > table.length) rehash(table.length * 2);
         ensureEntries(entries + 1);
         ensureStored(storedCount + capturedLength);
@@ -42,6 +80,8 @@ final class FrameBonePaletteCache {
         System.arraycopy(scratch, 0, storedBits, storedCount, capturedLength);
         storedCount += capturedLength;
         insert(entry);
+        capturedForStore = false;
+        return true;
     }
 
     void beginFrame() {
@@ -50,10 +90,35 @@ final class FrameBonePaletteCache {
         Arrays.fill(palettes, 0, entries, null);
         entries = 0;
         storedCount = 0;
+        lastLookupPerformed = false;
+        capturedForStore = false;
+        for (ReuseProbe probe : reuseProbes.values()) probe.beginFrame();
+    }
+
+    void clear() {
+        beginFrame();
+        reuseProbes.clear();
+        recentProbeTopology = null;
+        recentProbe = null;
+        capturedTopology = null;
+        capturedLength = 0;
+        capturedHash = 0L;
     }
 
     int size() {
         return entries;
+    }
+
+    private ReuseProbe probe(GenericModelPartTopology topology) {
+        if (topology == recentProbeTopology) return recentProbe;
+        ReuseProbe probe = reuseProbes.get(topology);
+        if (probe == null) {
+            probe = new ReuseProbe();
+            reuseProbes.put(topology, probe);
+        }
+        recentProbeTopology = topology;
+        recentProbe = probe;
+        return probe;
     }
 
     private void capture(GenericModelPartTopology topology) {
@@ -138,5 +203,17 @@ final class FrameBonePaletteCache {
         value *= 0xff51afd7ed558ccdL;
         value ^= value >>> 33;
         return (int) value;
+    }
+
+    private static final class ReuseProbe {
+        private int misses;
+        private boolean reuseConfirmed;
+        private boolean bypass;
+
+        private void beginFrame() {
+            misses = 0;
+            reuseConfirmed = false;
+            bypass = false;
+        }
     }
 }

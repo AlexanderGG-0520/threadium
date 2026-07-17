@@ -102,9 +102,16 @@ tasks.named('runClient').configure {
     def benchmarkMode = providers.gradleProperty('threadiumBenchmarkMode')
     if (benchmarkMode.isPresent()) {
         jvmArgs "-Dthreadium.benchmark.mode=${benchmarkMode.get()}"
-        ['scene', 'trial', 'setupSeconds', 'warmupSeconds', 'measurementSeconds', 'maxSamples', 'bootstrap', 'autoExit'].each { key ->
+        ['scene', 'trial', 'entities', 'setupSeconds', 'warmupSeconds', 'measurementSeconds', 'maxSamples', 'bootstrap', 'autoExit'].each { key ->
             def property = providers.gradleProperty("threadiumBenchmark${key.capitalize()}")
             if (property.isPresent()) jvmArgs "-Dthreadium.benchmark.${key}=${property.get()}"
         }
+    }
+    [
+        threadiumProfileIntercept: 'threadium.modelpart.profileIntercept',
+        threadiumProfileFlush: 'threadium.modelpart.profileFlush'
+    ].each { gradleProperty, systemProperty ->
+        def property = providers.gradleProperty(gradleProperty)
+        if (property.isPresent()) jvmArgs "-D${systemProperty}=${property.get()}"
     }
 }

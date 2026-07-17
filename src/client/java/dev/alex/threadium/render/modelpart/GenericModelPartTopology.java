@@ -9,7 +9,15 @@ import net.minecraft.client.model.geom.ModelPart;
 public record GenericModelPartTopology(List<Node> nodes, StructuralKey key) {
     public record Node(ModelPart part, int parent, int index, String path) {}
 
-    public record StructuralKey(long fingerprint, List<Long> exact) {}
+    public record StructuralKey(long fingerprint, List<Long> exact) {
+        /**
+         * Keep the cache hot path O(1); record equality still verifies the exact geometry on fingerprint collisions.
+         */
+        @Override
+        public int hashCode() {
+            return Long.hashCode(fingerprint);
+        }
+    }
 
     public static GenericModelPartTopology inspect(ModelPart root, int maxBones, int maxDepth, long generation) {
         ArrayList<Node> nodes = new ArrayList<>();

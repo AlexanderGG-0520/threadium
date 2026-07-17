@@ -3,24 +3,38 @@ package dev.alex.threadium.render.modelpart;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 
+/** Render-thread-owned, non-thread-safe ModelPart pose extractor. */
 public final class GenericModelPartPoseExtractor {
+    private static final int FLOATS_PER_BONE = 28;
+
+    private final PoseExtractionScratch scratch = new PoseExtractionScratch();
+
     public ModelPartBoneData extract(GenericModelPartTopology topology) {
-        Matrix4f[] accumulated = new Matrix4f[topology.nodes().size()];
-        boolean[] treeVisible = new boolean[topology.nodes().size()];
-        float[] out = new float[topology.nodes().size() * 28];
-        VisibilityMask visibility = new VisibilityMask(topology.nodes().size());
+        int boneCount = topology.nodes().size();
+        scratch.ensureCapacity(boneCount);
+        float[] out = new float[Math.multiplyExact(boneCount, FLOATS_PER_BONE)];
+        long[] visibility = new long[(boneCount + 63) >>> 6];
         for (GenericModelPartTopology.Node node : topology.nodes()) {
-            Matrix4f parent = node.parent() < 0 ? new Matrix4f() : accumulated[node.parent()];
-            var p = node.part();
-            Matrix4f matrix = dev.alex.threadium.render.modelpart.TransformMath.compose(
-                    parent, p.x, p.y, p.z, p.xRot, p.yRot, p.zRot, p.xScale, p.yScale, p.zScale);
-            accumulated[node.index()] = matrix;
-            boolean parentVisible = node.parent() < 0 || treeVisible[node.parent()];
-            treeVisible[node.index()] = parentVisible && p.visible;
-            visibility.set(node.index(), treeVisible[node.index()] && !p.skipDraw);
-            int base = node.index() * 28;
+            var part = node.part();
+            Matrix4f matrix = TransformMath.compose(
+                    scratch.parentMatrix(node.parent()),
+                    scratch.matrix(node.index()),
+                    part.x,
+                    part.y,
+                    part.z,
+                    part.xRot,
+                    part.yRot,
+                    part.zRot,
+                    part.xScale,
+                    part.yScale,
+                    part.zScale);
+            boolean parentVisible = node.parent() < 0 || scratch.treeVisible(node.parent());
+            boolean treeVisible = parentVisible && part.visible;
+            scratch.treeVisible(node.index(), treeVisible);
+            if (treeVisible && !part.skipDraw) visibility[node.index() >>> 6] |= 1L << (node.index() & 63);
+            int base = node.index() * FLOATS_PER_BONE;
             matrix.get(out, base);
-            Matrix3f normal = new Matrix3f(matrix).normal();
+            Matrix3f normal = scratch.normal(matrix);
             out[base + 16] = normal.m00();
             out[base + 17] = normal.m01();
             out[base + 18] = normal.m02();
@@ -34,6 +48,6 @@ public final class GenericModelPartPoseExtractor {
             out[base + 26] = normal.m22();
             out[base + 27] = 0;
         }
-        return new ModelPartBoneData(out, visibility.copyWords());
+        return new ModelPartBoneData(out, visibility);
     }
 }

@@ -21,8 +21,53 @@ public record BenchmarkSceneSpec(
         double baseZ,
         String dimension,
         long fixedTime) {
-    public static final BenchmarkSceneSpec STATIC = new BenchmarkSceneSpec(
-            "Threadium Benchmark", 1, "minecraft:cow", 16, 16, 2.5, -18.75, 65.0, 0.0, "minecraft:overworld", 6000L);
+    public static final int MIN_ENTITY_COUNT = 16;
+    public static final int MAX_ENTITY_COUNT = 1024;
+    public static final int DEFAULT_ENTITY_COUNT = 256;
+    private static final double FOOTPRINT_SIZE = 37.5;
+    private static final double FOOTPRINT_MIN_X = -18.75;
+    private static final double FOOTPRINT_MIN_Z = 0.0;
+
+    public static final BenchmarkSceneSpec STATIC = forEntityCount(configuredEntityCount());
+
+    public static BenchmarkSceneSpec forEntityCount(int entityCount) {
+        validateEntityCount(entityCount);
+        int log2 = Integer.numberOfTrailingZeros(entityCount);
+        int gridWidth = 1 << ((log2 + 1) / 2);
+        int gridHeight = entityCount / gridWidth;
+        double spacing = FOOTPRINT_SIZE / (gridWidth - 1);
+        double depth = (gridHeight - 1) * spacing;
+        double baseZ = FOOTPRINT_MIN_Z + (FOOTPRINT_SIZE - depth) * 0.5;
+        return new BenchmarkSceneSpec(
+                "Threadium Benchmark",
+                2,
+                "minecraft:cow",
+                gridWidth,
+                gridHeight,
+                spacing,
+                FOOTPRINT_MIN_X,
+                65.0,
+                baseZ,
+                "minecraft:overworld",
+                6000L);
+    }
+
+    private static int configuredEntityCount() {
+        String raw = System.getProperty("threadium.benchmark.entities", Integer.toString(DEFAULT_ENTITY_COUNT));
+        try {
+            int entityCount = Integer.parseInt(raw);
+            validateEntityCount(entityCount);
+            return entityCount;
+        } catch (NumberFormatException invalid) {
+            throw new IllegalArgumentException("threadium.benchmark.entities must be an integer: " + raw, invalid);
+        }
+    }
+
+    private static void validateEntityCount(int entityCount) {
+        if (entityCount < MIN_ENTITY_COUNT || entityCount > MAX_ENTITY_COUNT || (entityCount & (entityCount - 1)) != 0)
+            throw new IllegalArgumentException(
+                    "entityCount must be a power of two from " + MIN_ENTITY_COUNT + " through " + MAX_ENTITY_COUNT);
+    }
 
     public int entityCount() {
         return Math.multiplyExact(gridWidth, gridHeight);

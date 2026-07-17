@@ -53,7 +53,7 @@ class BenchmarkCoreTest {
 
     @Test
     void vanillaRejectsAnyReplacementActivity() {
-        var counters = new BenchmarkTrialValidator.Counters(1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0);
+        var counters = new BenchmarkTrialValidator.Counters(1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0);
         List<String> reasons = BenchmarkTrialValidator.validate(
                 ModelPartBenchmarkMode.VANILLA, counters, true, true, true, true, true, false, 100, 100, 10);
         assertTrue(reasons.contains("VANILLA replacement activity"));
@@ -61,7 +61,7 @@ class BenchmarkCoreTest {
 
     @Test
     void singletonRequiresOneDrawPerInstance() {
-        var counters = new BenchmarkTrialValidator.Counters(10, 10, 10, 10, 9, 1, 2, 0, 0, 0, 0, 0, 0, 0);
+        var counters = new BenchmarkTrialValidator.Counters(10, 10, 10, 10, 9, 10, 9, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0);
         List<String> reasons = BenchmarkTrialValidator.validate(
                 ModelPartBenchmarkMode.SINGLETON, counters, true, true, true, true, true, false, 100, 100, 10);
         assertTrue(reasons.contains("SINGLETON draw invariant"));
@@ -69,7 +69,7 @@ class BenchmarkCoreTest {
 
     @Test
     void batchingAllowsReducedDrawCount() {
-        var counters = new BenchmarkTrialValidator.Counters(10, 10, 10, 10, 2, 2, 8, 0, 0, 0, 0, 0, 0, 0);
+        var counters = new BenchmarkTrialValidator.Counters(10, 10, 10, 10, 2, 10, 2, 0, 0, 2, 8, 0, 0, 0, 0, 0, 0, 0);
         assertTrue(BenchmarkTrialValidator.validate(
                         ModelPartBenchmarkMode.BATCHING, counters, true, true, true, true, true, false, 100, 100, 10)
                 .isEmpty());
@@ -77,15 +77,25 @@ class BenchmarkCoreTest {
 
     @Test
     void batchingRequiresActualConsolidation() {
-        var counters = new BenchmarkTrialValidator.Counters(10, 10, 10, 10, 10, 0, 1, 0, 0, 0, 0, 0, 0, 0);
+        var counters =
+                new BenchmarkTrialValidator.Counters(10, 10, 10, 10, 10, 10, 10, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0);
         assertTrue(BenchmarkTrialValidator.validate(
                         ModelPartBenchmarkMode.BATCHING, counters, true, true, true, true, true, false, 100, 100, 10)
                 .contains("BATCHING draw invariant"));
     }
 
     @Test
+    void sortedDrawsDoNotInvalidateBatchingScope() {
+        var counters =
+                new BenchmarkTrialValidator.Counters(12, 12, 12, 12, 26, 10, 2, 2, 24, 2, 8, 0, 0, 0, 0, 0, 0, 0);
+        assertTrue(BenchmarkTrialValidator.validate(
+                        ModelPartBenchmarkMode.BATCHING, counters, true, true, true, true, true, false, 100, 100, 10)
+                .isEmpty());
+    }
+
+    @Test
     void invalidTrialSignalsEnvironmentalAndBackendFailures() {
-        var counters = new BenchmarkTrialValidator.Counters(1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1);
+        var counters = new BenchmarkTrialValidator.Counters(1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1);
         List<String> reasons = BenchmarkTrialValidator.validate(
                 ModelPartBenchmarkMode.SINGLETON, counters, false, false, false, false, false, true, 10, 100, 1);
         assertTrue(reasons.size() >= 10);
@@ -125,7 +135,31 @@ class BenchmarkCoreTest {
         assertEquals(256, new HashSet<>(scene.placements()).size());
         assertEquals(scene.hash(), BenchmarkSceneSpec.STATIC.hash());
         assertEquals(64, scene.hash().length());
-        assertTrue(scene.markerContents().contains("version=1"));
+        assertTrue(scene.markerContents().contains("version=2"));
+    }
+
+    @Test
+    void breakEvenSweepLayoutsRemainInsideTheOriginalFootprint() {
+        for (int entityCount : new int[] {16, 32, 64, 128, 256, 512, 1024}) {
+            var scene = BenchmarkSceneSpec.forEntityCount(entityCount);
+            var placements = scene.placements();
+            assertEquals(entityCount, scene.entityCount());
+            assertEquals(entityCount, placements.size());
+            assertEquals(entityCount, new HashSet<>(placements).size());
+            assertTrue(placements.stream()
+                    .allMatch(placement -> placement.x() >= -18.75
+                            && placement.x() <= 18.75
+                            && placement.z() >= 0.0
+                            && placement.z() <= 37.5));
+            assertTrue(scene.markerContents().contains("expectedEntities=" + entityCount));
+        }
+    }
+
+    @Test
+    void breakEvenSweepRejectsUnsupportedEntityCounts() {
+        assertThrows(IllegalArgumentException.class, () -> BenchmarkSceneSpec.forEntityCount(8));
+        assertThrows(IllegalArgumentException.class, () -> BenchmarkSceneSpec.forEntityCount(48));
+        assertThrows(IllegalArgumentException.class, () -> BenchmarkSceneSpec.forEntityCount(2048));
     }
 
     @Test

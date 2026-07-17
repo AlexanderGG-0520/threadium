@@ -154,8 +154,12 @@ public final class SelectingModelPartGpuBackend implements ModelPartGpuBackend {
         if (stats.instances() > 0) metrics.blaze3dGroupsSubmitted.increment();
         metrics.drawnInstances.add(stats.instances());
         metrics.drawCalls.add(stats.drawCalls());
-        metrics.instancedDraws.add(stats.drawCalls());
-        metrics.consolidatedBatches.add(stats.drawCalls());
+        metrics.batchableInstances.add(stats.batchableInstances());
+        metrics.batchableDrawCalls.add(stats.batchableDrawCalls());
+        metrics.sortedInstances.add(stats.sortedInstances());
+        metrics.sortedDrawCalls.add(stats.sortedDrawCalls());
+        metrics.instancedDraws.add(stats.batchableDrawCalls());
+        metrics.consolidatedBatches.add(stats.batchableDrawCalls());
         metrics.singletonBatches.add(stats.singletonBatches());
         metrics.multiInstanceBatches.add(stats.multiInstanceBatches());
         metrics.totalInstancesInMultiDraws.add(stats.totalInstancesInMultiDraws());

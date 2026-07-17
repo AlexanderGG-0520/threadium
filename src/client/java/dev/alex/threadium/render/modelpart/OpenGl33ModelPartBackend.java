@@ -262,6 +262,10 @@ public final class OpenGl33ModelPartBackend implements ModelPartGpuBackend {
             return new FlushStats(
                     entryCount,
                     calls,
+                    entryCount,
+                    calls,
+                    0,
+                    0,
                     singletons,
                     multi,
                     max,

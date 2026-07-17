@@ -34,6 +34,10 @@ public final class ModelPartGpuMetrics {
     public final LongAdder backendUnavailableFallbacks = new LongAdder(),
             materialFallbacks = new LongAdder(),
             drawCalls = new LongAdder();
+    public final LongAdder batchableInstances = new LongAdder(),
+            batchableDrawCalls = new LongAdder(),
+            sortedInstances = new LongAdder(),
+            sortedDrawCalls = new LongAdder();
     public final LongAdder consolidatedBatches = new LongAdder(),
             singletonBatches = new LongAdder(),
             multiInstanceBatches = new LongAdder(),
@@ -69,15 +73,31 @@ public final class ModelPartGpuMetrics {
     public final LongAdder posePaletteLookups = new LongAdder(),
             posePaletteHits = new LongAdder(),
             posePaletteMisses = new LongAdder(),
+            posePaletteBypasses = new LongAdder(),
+            directPackedPosePalettes = new LongAdder(),
             uniqueBonePalettes = new LongAdder(),
             reusedBonePalettes = new LongAdder();
     public final LongAdder boneMatricesComposed = new LongAdder(),
             boneMatricesAvoided = new LongAdder(),
             boneBytesRequested = new LongAdder(),
             boneBytesAvoided = new LongAdder();
+    public final LongAdder interceptProfileCount = new LongAdder(),
+            interceptTotalNanos = new LongAdder(),
+            interceptPipelineValidationNanos = new LongAdder(),
+            interceptTopologyAndMeshLookupNanos = new LongAdder(),
+            interceptPosePreparationNanos = new LongAdder(),
+            interceptMaterialCaptureNanos = new LongAdder(),
+            interceptBackendQueueNanos = new LongAdder();
     public final LongAdder poseLookupNanos = new LongAdder(),
             boneCompositionNanos = new LongAdder(),
             bonePackingNanos = new LongAdder();
+    public final LongAdder blaze3dFlushCount = new LongAdder(),
+            blaze3dFlushTotalNanos = new LongAdder(),
+            blaze3dBoneAndInstancePackingNanos = new LongAdder(),
+            blaze3dBoneUploadNanos = new LongAdder(),
+            blaze3dInstanceUploadNanos = new LongAdder(),
+            blaze3dDrawPlanningNanos = new LongAdder(),
+            blaze3dDrawSubmissionNanos = new LongAdder();
     public final LongAdder sortedPipelineInstances = new LongAdder(),
             sortedQuadsCollected = new LongAdder(),
             sortedQuadsSubmitted = new LongAdder(),
@@ -90,6 +110,38 @@ public final class ModelPartGpuMetrics {
             sortedSubmissionNanos = new LongAdder();
     public final java.util.concurrent.atomic.AtomicInteger maximumInstancesPerDraw =
             new java.util.concurrent.atomic.AtomicInteger();
+
+    void recordBlaze3dFlushTiming(
+            long totalNanos,
+            long packingNanos,
+            long boneUploadNanos,
+            long instanceUploadNanos,
+            long drawPlanningNanos,
+            long drawSubmissionNanos) {
+        blaze3dFlushCount.increment();
+        blaze3dFlushTotalNanos.add(totalNanos);
+        blaze3dBoneAndInstancePackingNanos.add(packingNanos);
+        blaze3dBoneUploadNanos.add(boneUploadNanos);
+        blaze3dInstanceUploadNanos.add(instanceUploadNanos);
+        blaze3dDrawPlanningNanos.add(drawPlanningNanos);
+        blaze3dDrawSubmissionNanos.add(drawSubmissionNanos);
+    }
+
+    void recordInterceptTiming(
+            long totalNanos,
+            long pipelineValidationNanos,
+            long topologyAndMeshLookupNanos,
+            long posePreparationNanos,
+            long materialCaptureNanos,
+            long backendQueueNanos) {
+        interceptProfileCount.increment();
+        interceptTotalNanos.add(totalNanos);
+        interceptPipelineValidationNanos.add(pipelineValidationNanos);
+        interceptTopologyAndMeshLookupNanos.add(topologyAndMeshLookupNanos);
+        interceptPosePreparationNanos.add(posePreparationNanos);
+        interceptMaterialCaptureNanos.add(materialCaptureNanos);
+        interceptBackendQueueNanos.add(backendQueueNanos);
+    }
 
     void pipelineAccepted(ModelPartPipelineDescriptor descriptor) {
         if (descriptor != null) pipelineAccepted.incrementAndGet(descriptor.ordinal());

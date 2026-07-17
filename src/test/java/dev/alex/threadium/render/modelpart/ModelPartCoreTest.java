@@ -28,6 +28,32 @@ class ModelPartCoreTest {
     }
 
     @Test
+    void structuralKeyHashCodeDoesNotTraverseExactGeometry() {
+        java.util.List<Long> exact = new java.util.AbstractList<>() {
+            @Override
+            public Long get(int index) {
+                return 1L;
+            }
+
+            @Override
+            public int size() {
+                return 1;
+            }
+
+            @Override
+            public int hashCode() {
+                throw new AssertionError("StructuralKey hashCode traversed exact geometry");
+            }
+        };
+        long fingerprint = 0x1234_5678_9ABC_DEF0L;
+        var key = new GenericModelPartTopology.StructuralKey(fingerprint, exact);
+        assertEquals(Long.hashCode(fingerprint), key.hashCode());
+        assertNotEquals(
+                new GenericModelPartTopology.StructuralKey(fingerprint, java.util.List.of(1L)),
+                new GenericModelPartTopology.StructuralKey(fingerprint, java.util.List.of(2L)));
+    }
+
+    @Test
     void layoutsAreBoundedAndOverflowSafe() {
         assertEquals(112, ModelPartLayouts.BONE_STRIDE);
         assertEquals(112, ModelPartLayouts.INSTANCE_STRIDE);

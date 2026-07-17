@@ -14,6 +14,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 
 public final class ModelPartRenderService {
     private static final boolean VERIFY_PALETTE_REUSE = Boolean.getBoolean("threadium.verifyPosePaletteReuse");
+    private static final boolean PROFILE_INTERCEPT = Boolean.getBoolean("threadium.modelpart.profileIntercept");
     private static ModelPartRenderService INSTANCE;
     private final ThreadiumConfig config;
     private final ModelPartGpuMetrics metrics = new ModelPartGpuMetrics();
@@ -110,12 +111,18 @@ public final class ModelPartRenderService {
             RenderType type,
             TextureAtlasSprite sprite,
             PoseStack.Pose sheetedDecalPose) {
+        long interceptStart = interceptProfileNow();
         ModelPartPipelineDescriptor differentialDescriptor = ModelPartPipelineDescriptor.from(type.pipeline());
         String differentialCanonical =
                 differentialDescriptor == null ? "unknown_custom" : differentialDescriptor.canonicalName();
         if (DifferentialExecutionScope.referenceBypass(differentialCanonical))
             return ModelPartInterceptionResult.PASS_THROUGH;
         metrics.eligibleInvocations.increment();
+        long pipelineValidationNanos = 0L;
+        long topologyAndMeshLookupNanos = 0L;
+        long posePreparationNanos = 0L;
+        long materialCaptureNanos = 0L;
+        long backendQueueNanos = 0L;
         if (debugMode.overlayOnly()) {
             if (!loggedOverlayInterception) {
                 loggedOverlayInterception = true;
@@ -130,6 +137,7 @@ public final class ModelPartRenderService {
             metrics.interceptionPassThroughs.increment();
             return ModelPartInterceptionResult.PASS_THROUGH;
         }
+        long pipelineValidationStart = interceptProfileNow();
         if (compatibilityReason() != null) {
             recordFallback("backend compatibility", model, type, null);
             metrics.backendUnavailableFallbacks.increment();
@@ -162,6 +170,8 @@ public final class ModelPartRenderService {
             metrics.interceptionPassThroughs.increment();
             return ModelPartInterceptionResult.PASS_THROUGH;
         }
+        long topologyAndMeshLookupStart = interceptProfileNow();
+        pipelineValidationNanos = interceptProfileDelta(pipelineValidationStart, topologyAndMeshLookupStart);
         try {
             ModelPart root = model.root();
             GenericModelPartTopology topology = topologies.get(root);
@@ -189,10 +199,14 @@ public final class ModelPartRenderService {
                     return ModelPartInterceptionResult.PASS_THROUGH;
                 }
             } else metrics.meshHits.increment();
+            long posePreparationStart = interceptProfileNow();
+            topologyAndMeshLookupNanos = interceptProfileDelta(topologyAndMeshLookupStart, posePreparationStart);
             long poseLookupStart = System.nanoTime();
             ModelPartBoneData boneData = posePalettes.find(topology);
             metrics.poseLookupNanos.add(System.nanoTime() - poseLookupStart);
-            metrics.posePaletteLookups.increment();
+            boolean lookupPerformed = posePalettes.lastLookupPerformed();
+            if (lookupPerformed) metrics.posePaletteLookups.increment();
+            else metrics.posePaletteBypasses.increment();
             boolean reused = boneData != null;
             if (reused) {
                 metrics.posePaletteHits.increment();
@@ -209,29 +223,28 @@ public final class ModelPartRenderService {
                 long compositionStart = System.nanoTime();
                 boneData = poses.extract(topology);
                 metrics.boneCompositionNanos.add(System.nanoTime() - compositionStart);
-                posePalettes.store(boneData);
-                metrics.posePaletteMisses.increment();
-                metrics.uniqueBonePalettes.increment();
+                boolean stored = posePalettes.store(boneData);
+                if (lookupPerformed) metrics.posePaletteMisses.increment();
+                if (stored) metrics.uniqueBonePalettes.increment();
+                else metrics.directPackedPosePalettes.increment();
                 metrics.boneMatricesComposed.add(topology.nodes().size());
             }
+            long materialCaptureStart = interceptProfileNow();
+            posePreparationNanos = interceptProfileDelta(posePreparationStart, materialCaptureStart);
             ModelPartDecalTransform decal =
                     sheetedDecalPose == null ? null : ModelPartDecalTransform.capture(sheetedDecalPose);
-            if (!backend.queue(
-                    handle,
-                    type,
-                    stack.last().pose(),
-                    boneData,
-                    light,
-                    overlay,
-                    tint,
-                    ModelPartUvTransform.from(sprite),
-                    decal)) {
+            ModelPartUvTransform uvTransform = ModelPartUvTransform.from(sprite);
+            long backendQueueStart = interceptProfileNow();
+            materialCaptureNanos = interceptProfileDelta(materialCaptureStart, backendQueueStart);
+            if (!backend.queue(handle, type, stack.last().pose(), boneData, light, overlay, tint, uvTransform, decal)) {
                 recordFallback("queue capacity", model, type, pipelineValidity);
                 metrics.capacityFallbacks.increment();
                 metrics.vanillaFallbacks.increment();
                 metrics.interceptionPassThroughs.increment();
                 return ModelPartInterceptionResult.PASS_THROUGH;
             }
+            long backendQueueEnd = interceptProfileNow();
+            backendQueueNanos = interceptProfileDelta(backendQueueStart, backendQueueEnd);
             long requestedBoneBytes = (long) topology.nodes().size() * ModelPartLayouts.BONE_STRIDE;
             metrics.boneBytesRequested.add(requestedBoneBytes);
             if (reused) metrics.boneBytesAvoided.add(requestedBoneBytes);
@@ -239,6 +252,14 @@ public final class ModelPartRenderService {
             metrics.acceptedInvocations.increment();
             metrics.queuedInstances.increment();
             metrics.productionReplacementAccepts.increment();
+            if (PROFILE_INTERCEPT)
+                metrics.recordInterceptTiming(
+                        interceptProfileDelta(interceptStart, interceptProfileNow()),
+                        pipelineValidationNanos,
+                        topologyAndMeshLookupNanos,
+                        posePreparationNanos,
+                        materialCaptureNanos,
+                        backendQueueNanos);
             return ModelPartInterceptionResult.GPU_REPLACED;
         } catch (Throwable failure) {
             recordFallback(
@@ -248,6 +269,14 @@ public final class ModelPartRenderService {
             metrics.interceptionPassThroughs.increment();
             return ModelPartInterceptionResult.PASS_THROUGH;
         }
+    }
+
+    private static long interceptProfileNow() {
+        return PROFILE_INTERCEPT ? System.nanoTime() : 0L;
+    }
+
+    private static long interceptProfileDelta(long start, long end) {
+        return PROFILE_INTERCEPT ? end - start : 0L;
     }
 
     private void recordFallback(String reason, Model<?> model, RenderType type, PipelineValidity validity) {
@@ -371,7 +400,7 @@ public final class ModelPartRenderService {
         for (var h : cache.handles()) backend.destroy(h);
         cache.clear();
         topologies.clear();
-        posePalettes.beginFrame();
+        posePalettes.clear();
         backend.clear();
         if (backend.state() == ModelPartBackendState.FAILED) {
             backend.close();
@@ -396,9 +425,61 @@ public final class ModelPartRenderService {
         backend.close();
     }
 
+    public Blaze3dFlushTimings benchmarkFlushTimingsSnapshotAndReset() {
+        return new Blaze3dFlushTimings(
+                metrics.blaze3dFlushCount.sumThenReset(),
+                metrics.blaze3dFlushTotalNanos.sumThenReset(),
+                metrics.blaze3dBoneAndInstancePackingNanos.sumThenReset(),
+                metrics.blaze3dBoneUploadNanos.sumThenReset(),
+                metrics.blaze3dInstanceUploadNanos.sumThenReset(),
+                metrics.blaze3dDrawPlanningNanos.sumThenReset(),
+                metrics.blaze3dDrawSubmissionNanos.sumThenReset());
+    }
+
+    public record Blaze3dFlushTimings(
+            long count,
+            long flushTotalNanos,
+            long boneAndInstancePackingNanos,
+            long boneUploadNanos,
+            long instanceUploadNanos,
+            long drawPlanningNanos,
+            long drawSubmissionNanos) {
+        public static Blaze3dFlushTimings zero() {
+            return new Blaze3dFlushTimings(0, 0, 0, 0, 0, 0, 0);
+        }
+    }
+
+    public InterceptTimings benchmarkInterceptTimingsSnapshotAndReset() {
+        return new InterceptTimings(
+                metrics.interceptProfileCount.sumThenReset(),
+                metrics.interceptTotalNanos.sumThenReset(),
+                metrics.interceptPipelineValidationNanos.sumThenReset(),
+                metrics.interceptTopologyAndMeshLookupNanos.sumThenReset(),
+                metrics.interceptPosePreparationNanos.sumThenReset(),
+                metrics.interceptMaterialCaptureNanos.sumThenReset(),
+                metrics.interceptBackendQueueNanos.sumThenReset());
+    }
+
+    public record InterceptTimings(
+            long count,
+            long interceptTotalNanos,
+            long pipelineValidationNanos,
+            long topologyAndMeshLookupNanos,
+            long posePreparationNanos,
+            long materialCaptureNanos,
+            long backendQueueNanos) {
+        public static InterceptTimings zero() {
+            return new InterceptTimings(0, 0, 0, 0, 0, 0, 0);
+        }
+    }
+
     public BenchmarkMetrics benchmarkSnapshotAndReset() {
         long drawn = metrics.drawnInstances.sumThenReset(),
                 calls = metrics.drawCalls.sumThenReset(),
+                batchableInstances = metrics.batchableInstances.sumThenReset(),
+                batchableCalls = metrics.batchableDrawCalls.sumThenReset(),
+                sortedInstances = metrics.sortedInstances.sumThenReset(),
+                sortedCalls = metrics.sortedDrawCalls.sumThenReset(),
                 multiInstances = metrics.totalInstancesInMultiDraws.sumThenReset();
         int maximum = metrics.maximumInstancesPerDraw.getAndSet(0);
         return new BenchmarkMetrics(
@@ -408,6 +489,10 @@ public final class ModelPartRenderService {
                 metrics.queuedInstances.sumThenReset(),
                 drawn,
                 calls,
+                batchableInstances,
+                batchableCalls,
+                sortedInstances,
+                sortedCalls,
                 metrics.multiInstanceBatches.sumThenReset(),
                 maximum,
                 multiInstances,
@@ -429,6 +514,8 @@ public final class ModelPartRenderService {
                 metrics.posePaletteLookups.sumThenReset(),
                 metrics.posePaletteHits.sumThenReset(),
                 metrics.posePaletteMisses.sumThenReset(),
+                metrics.posePaletteBypasses.sumThenReset(),
+                metrics.directPackedPosePalettes.sumThenReset(),
                 metrics.uniqueBonePalettes.sumThenReset(),
                 metrics.reusedBonePalettes.sumThenReset(),
                 metrics.boneMatricesComposed.sumThenReset(),
@@ -447,6 +534,10 @@ public final class ModelPartRenderService {
             long queuedInstances,
             long drawnInstances,
             long drawCalls,
+            long batchableInstances,
+            long batchableDrawCalls,
+            long sortedInstances,
+            long sortedDrawCalls,
             long multiInstanceBatches,
             long maximumInstancesPerDraw,
             long totalInstancesInMultiDraws,
@@ -468,6 +559,8 @@ public final class ModelPartRenderService {
             long posePaletteLookups,
             long posePaletteHits,
             long posePaletteMisses,
+            long posePaletteBypasses,
+            long directPackedPosePalettes,
             long uniqueBonePalettes,
             long reusedBonePalettes,
             long boneMatricesComposed,
@@ -478,27 +571,31 @@ public final class ModelPartRenderService {
             long boneCompositionNanos,
             long bonePackingNanos) {
         public double instancesPerDraw() {
-            return BatchMetricMath.instancesPerDraw(drawnInstances, drawCalls);
+            return BatchMetricMath.instancesPerDraw(batchableInstances, batchableDrawCalls);
         }
 
         public double drawReductionRatio() {
-            return BatchMetricMath.drawReduction(drawnInstances, drawCalls);
+            return BatchMetricMath.drawReduction(batchableInstances, batchableDrawCalls);
         }
 
         public double multiInstanceCoverage() {
-            return BatchMetricMath.multiCoverage(totalInstancesInMultiDraws, drawnInstances);
+            return BatchMetricMath.multiCoverage(totalInstancesInMultiDraws, batchableInstances);
         }
 
         public static BenchmarkMetrics zero() {
             return new BenchmarkMetrics(
                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0);
+                    0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
     }
 
     public String metricsSnapshot() {
         long drawn = metrics.drawnInstances.sumThenReset(),
                 calls = metrics.drawCalls.sumThenReset(),
+                batchableInstances = metrics.batchableInstances.sumThenReset(),
+                batchableCalls = metrics.batchableDrawCalls.sumThenReset(),
+                sortedInstances = metrics.sortedInstances.sumThenReset(),
+                sortedCalls = metrics.sortedDrawCalls.sumThenReset(),
                 multiInstances = metrics.totalInstancesInMultiDraws.sumThenReset();
         int maximum = metrics.maximumInstancesPerDraw.getAndSet(0);
         return "gpuEntity={state=" + backend.state() + ",selectedBackend=" + backend.selected()
@@ -515,13 +612,15 @@ public final class ModelPartRenderService {
                 + metrics.vanillaSuppressions.sumThenReset() + ",forbiddenSuppressionAttempts="
                 + metrics.forbiddenSuppressionAttempts.sumThenReset() + ",queuedInstances="
                 + metrics.queuedInstances.sumThenReset() + ",drawnInstances=" + drawn + ",drawCalls=" + calls
+                + ",batchableInstances=" + batchableInstances + ",batchableDrawCalls=" + batchableCalls
+                + ",sortedInstances=" + sortedInstances + ",sortedDrawCalls=" + sortedCalls
                 + ",consolidatedBatches=" + metrics.consolidatedBatches.sumThenReset() + ",singletonBatches="
                 + metrics.singletonBatches.sumThenReset() + ",multiInstanceBatches="
                 + metrics.multiInstanceBatches.sumThenReset() + ",maximumInstancesPerDraw=" + maximum
                 + ",totalInstancesInMultiDraws=" + multiInstances + ",instancesPerDraw="
-                + BatchMetricMath.instancesPerDraw(drawn, calls) + ",drawReductionRatio="
-                + BatchMetricMath.drawReduction(drawn, calls) + ",multiInstanceCoverage="
-                + BatchMetricMath.multiCoverage(multiInstances, drawn) + ",instanceUploadCalls="
+                + BatchMetricMath.instancesPerDraw(batchableInstances, batchableCalls) + ",drawReductionRatio="
+                + BatchMetricMath.drawReduction(batchableInstances, batchableCalls) + ",multiInstanceCoverage="
+                + BatchMetricMath.multiCoverage(multiInstances, batchableInstances) + ",instanceUploadCalls="
                 + metrics.instanceUploadCalls.sumThenReset() + ",boneUploadCalls="
                 + metrics.boneUploadCalls.sumThenReset() + ",meshHits=" + metrics.meshHits.sumThenReset()
                 + ",meshMisses=" + metrics.meshMisses.sumThenReset() + ",meshBakeFailures="
