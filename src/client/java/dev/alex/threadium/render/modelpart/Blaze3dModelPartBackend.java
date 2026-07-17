@@ -558,21 +558,20 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
 
     private ArrayList<PlannedDraw> planDraws(int entryCount, boolean strictlyOrdered) {
         ArrayList<PlannedDraw> plans = new ArrayList<>();
-        Map<PreparedRenderType, PlannedDraw> firstPlanByPrepared = strictlyOrdered ? null : new java.util.HashMap<>();
         PlannedDraw last = null;
         for (int i = 0; i < entryCount; i++) {
             Queued q = queued.get(i);
             PlannedDraw plan = null;
-            boolean canConsolidate = q.type.canConsolidateConsecutiveGeometry();
-            if (last != null && last.type == q.type && canConsolidate) plan = last;
-            else if (!strictlyOrdered && canConsolidate) plan = firstPlanByPrepared.get(q.prepared);
+            if (last != null && last.type == q.type && q.type.canConsolidateConsecutiveGeometry()) plan = last;
+            else if (!strictlyOrdered && q.type.canConsolidateConsecutiveGeometry())
+                for (PlannedDraw candidate : plans)
+                    if (candidate.prepared.equals(q.prepared)) {
+                        plan = candidate;
+                        break;
+                    }
             if (plan == null) {
                 plan = new PlannedDraw(q.type, q.prepared);
                 plans.add(plan);
-                // The previous linear scan selected the first matching plan, including plans
-                // created by non-consolidatable entries. Register every new plan to preserve
-                // that behavior.
-                if (!strictlyOrdered) firstPlanByPrepared.putIfAbsent(q.prepared, plan);
             }
             plan.instances.add(i);
             last = plan;
