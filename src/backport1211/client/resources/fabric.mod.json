@@ -19,6 +19,9 @@
       "dev.alex.threadium.ThreadiumClient"
     ]
   },
+  "mixins": [
+    "threadium.mixins.json"
+  ],
   "depends": {
     "fabricloader": ">=0.16.14",
     "fabric-api": ">=0.116.14+1.21.1",
