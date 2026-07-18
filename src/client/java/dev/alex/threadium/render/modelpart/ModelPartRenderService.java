@@ -7,6 +7,8 @@ import dev.alex.threadium.ThreadiumClient;
 import dev.alex.threadium.benchmark.BoundedFallbackDiagnostics;
 import dev.alex.threadium.compat.IrisCompatibility;
 import dev.alex.threadium.config.ThreadiumConfig;
+import dev.alex.threadium.config.ThreadiumRuntimeConfig;
+import java.util.ArrayDeque;
 import net.minecraft.client.model.Model;
 import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.renderer.rendertype.RenderType;
@@ -31,8 +33,9 @@ public final class ModelPartRenderService {
     private final ModelPartTopologyCache topologies = new ModelPartTopologyCache();
 
     private final FrameBonePaletteCache posePalettes = new FrameBonePaletteCache();
+    private final AdaptiveModelPartBatchGate batchProfitability = new AdaptiveModelPartBatchGate();
+    private final ArrayDeque<GroupScope> groupReplacementScopes = new ArrayDeque<>();
     private long generation;
-    private static long nextConfigPollNanos;
 
     private ModelPartRenderService(ThreadiumConfig c) {
         config = c;
@@ -44,7 +47,8 @@ public final class ModelPartRenderService {
                 c.gpuMaxBonesPerFrame(),
                 c.gpuBatchConsolidation(),
                 debugMode,
-                c.gpuEntityEnabled()
+                c.enabled()
+                        && c.gpuEntityEnabled()
                         && compatibilityReason(c, irisShadersActive) == null
                         && !c.gpuBackend().equals("disabled")
                         && !debugMode.overlayOnly(),
@@ -73,19 +77,20 @@ public final class ModelPartRenderService {
     }
 
     private static String compatibilityReason(ThreadiumConfig config, boolean irisShadersActive) {
+        if (!config.enabled()) return "Threadium is disabled";
         if (!config.gpuEntityEnabled()) return "configuration";
         if (irisShadersActive) return "Iris shader pack is active";
         return null;
     }
 
-    public static void pollRuntimeConfig() {
-        long now = System.nanoTime();
-        if (now < nextConfigPollNanos) return;
-        nextConfigPollNanos = now + 1_000_000_000L;
-        ThreadiumConfig fresh = ThreadiumConfig.load();
+    public static void applyRuntimeConfig() {
+        ThreadiumConfig fresh = ThreadiumRuntimeConfig.persisted();
         ModelPartRenderService current = INSTANCE;
         if (current != null
-                && (fresh.gpuEntityEnabled() != current.config.gpuEntityEnabled()
+                && (fresh.enabled() != current.config.enabled()
+                        || fresh.gpuEntityEnabled() != current.config.gpuEntityEnabled()
+                        || fresh.gpuMinimumGroupSubmits() != current.config.gpuMinimumGroupSubmits()
+                        || fresh.gpuAllowVanillaFallback() != current.config.gpuAllowVanillaFallback()
                         || fresh.gpuBatchConsolidation() != current.config.gpuBatchConsolidation()
                         || !fresh.gpuDebugVisualMode().equals(current.config.gpuDebugVisualMode())
                         || fresh.gpuDebugSuppressVanilla() != current.config.gpuDebugSuppressVanilla()
@@ -93,13 +98,22 @@ public final class ModelPartRenderService {
             current.close();
             INSTANCE = new ModelPartRenderService(fresh);
             ThreadiumClient.LOGGER.info(
-                    "GPU ModelPart runtime configuration: enabled={}, backend={}, consolidation={}, debugVisualMode={}, debugSuppressVanilla={}; previous resources released",
+                    "GPU ModelPart runtime configuration: enabled={}, backend={}, consolidation={}, minimumGroupSubmits={}, debugVisualMode={}, debugSuppressVanilla={}; previous resources released",
                     fresh.gpuEntityEnabled(),
                     fresh.gpuBackend(),
                     fresh.gpuBatchConsolidation(),
+                    fresh.gpuMinimumGroupSubmits(),
                     fresh.gpuDebugVisualMode(),
                     fresh.gpuDebugSuppressVanilla());
         }
+    }
+
+    public boolean replacementEnabled() {
+        return config.enabled()
+                && config.gpuEntityEnabled()
+                && compatibilityReason() == null
+                && !config.gpuBackend().equals("disabled")
+                && !debugMode.overlayOnly();
     }
 
     public ModelPartInterceptionResult intercept(
@@ -135,6 +149,32 @@ public final class ModelPartRenderService {
         // Optional world-space diagnostics stay out of the replacement queue when vanilla
         // suppression is disabled. This preserves accepts == actual suppressions exactly.
         if (debugMode.worldSpaceDiagnostic() && !config.gpuDebugSuppressVanilla()) {
+            metrics.interceptionPassThroughs.increment();
+            return ModelPartInterceptionResult.PASS_THROUGH;
+        }
+        GroupScope group = currentGroup();
+        if (group == null || !group.allowed()) {
+            metrics.vanillaFallbacks.increment();
+            metrics.interceptionPassThroughs.increment();
+            return ModelPartInterceptionResult.PASS_THROUGH;
+        }
+        if (requiresVanillaForSortedPipeline(type.sortOnUpload())) {
+            recordFallback("sorted pipeline delegated to vanilla", model, type, null);
+            metrics.vanillaFallbacks.increment();
+            metrics.interceptionPassThroughs.increment();
+            return ModelPartInterceptionResult.PASS_THROUGH;
+        }
+        ModelPart root;
+        try {
+            root = model.root();
+        } catch (Throwable failure) {
+            recordFallback("model root failure: " + failure.getClass().getSimpleName(), model, type, null);
+            metrics.vanillaFallbacks.increment();
+            metrics.interceptionPassThroughs.increment();
+            return ModelPartInterceptionResult.PASS_THROUGH;
+        }
+        if (!batchProfitability.observeAndShouldReplace(group.ordinal(), root, type, config.gpuMinimumGroupSubmits())) {
+            metrics.vanillaFallbacks.increment();
             metrics.interceptionPassThroughs.increment();
             return ModelPartInterceptionResult.PASS_THROUGH;
         }
@@ -174,7 +214,6 @@ public final class ModelPartRenderService {
         long topologyAndMeshLookupStart = interceptProfileNow();
         pipelineValidationNanos = interceptProfileDelta(pipelineValidationStart, topologyAndMeshLookupStart);
         try {
-            ModelPart root = model.root();
             GenericModelPartTopology topology = topologies.get(root);
             if (topology == null) {
                 long topologyStart = System.nanoTime();
@@ -370,6 +409,8 @@ public final class ModelPartRenderService {
     public void beginDiagnosticFrame() {
         refreshIrisShaderState();
         if (DifferentialExecutionScope.active()) DifferentialExecutionScope.reset();
+        groupReplacementScopes.clear();
+        batchProfitability.beginFrame();
         posePalettes.beginFrame();
         backend.beginFrame();
         diagnosticOverlay.beginFrame(debugMode);
@@ -417,12 +458,32 @@ public final class ModelPartRenderService {
         diagnosticOverlay.drawMainTargetTail(debugMode);
     }
 
-    public void beginGroup(boolean strictlyOrdered) {
+    public void beginGroup(boolean strictlyOrdered, int submitCount) {
         backend.beginGroup(strictlyOrdered);
+        boolean parentAllows = groupReplacementScopes.isEmpty()
+                || groupReplacementScopes.getLast().allowed();
+        int ordinal = batchProfitability.nextGroupOrdinal();
+        groupReplacementScopes.addLast(new GroupScope(
+                parentAllows && groupMeetsMinimum(submitCount, config.gpuMinimumGroupSubmits()), ordinal));
     }
 
     public void endGroup() {
         backend.endGroup();
+        if (!groupReplacementScopes.isEmpty()) groupReplacementScopes.removeLast();
+    }
+
+    private GroupScope currentGroup() {
+        return groupReplacementScopes.isEmpty() ? null : groupReplacementScopes.getLast();
+    }
+
+    static boolean groupMeetsMinimum(int submitCount, int minimumSubmits) {
+        return submitCount >= minimumSubmits;
+    }
+
+    private record GroupScope(boolean allowed, int ordinal) {}
+
+    static boolean requiresVanillaForSortedPipeline(boolean sortOnUpload) {
+        return sortOnUpload;
     }
 
     public void flush() {
@@ -431,6 +492,8 @@ public final class ModelPartRenderService {
 
     public void invalidate() {
         DifferentialExecutionScope.reset();
+        groupReplacementScopes.clear();
+        batchProfitability.clear();
         generation++;
         backend.invalidatePipelines(generation);
         for (var h : cache.handles()) backend.destroy(h);

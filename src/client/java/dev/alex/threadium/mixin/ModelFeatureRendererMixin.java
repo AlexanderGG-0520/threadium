@@ -50,21 +50,23 @@ abstract class ModelFeatureRendererMixin {
             int tint,
             ModelFeatureRenderer.Submit<?> submit) {
         ModelPartRenderService service = ModelPartRenderService.get();
-        ModelPartInterceptionResult result = service == null
-                ? ModelPartInterceptionResult.PASS_THROUGH
-                : service.intercept(
-                        model,
-                        poseStack,
-                        consumer,
-                        light,
-                        overlay,
-                        tint,
-                        submit.renderType(),
-                        submit.sprite(),
-                        submit.sheetedDecalPose());
-        if (service != null) service.recordDifferentialCompletion(submit.renderType(), result);
+        if (service == null || !service.replacementEnabled()) {
+            model.renderToBuffer(poseStack, consumer, light, overlay, tint);
+            return;
+        }
+        ModelPartInterceptionResult result = service.intercept(
+                model,
+                poseStack,
+                consumer,
+                light,
+                overlay,
+                tint,
+                submit.renderType(),
+                submit.sprite(),
+                submit.sheetedDecalPose());
+        service.recordDifferentialCompletion(submit.renderType(), result);
         // Critical invariant: this is the sole vanilla-suppression decision in Threadium.
-        if (service != null && service.maySuppressVanilla(result)) {
+        if (service.maySuppressVanilla(result)) {
             service.recordVanillaSuppression();
             return;
         }

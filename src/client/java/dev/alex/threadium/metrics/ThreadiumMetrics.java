@@ -2,6 +2,7 @@ package dev.alex.threadium.metrics;
 
 import dev.alex.threadium.ThreadiumClient;
 import dev.alex.threadium.config.ThreadiumConfig;
+import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.render.phase.ThreadiumPhasePipeline;
 import dev.alex.threadium.render.text.RetainedTextManager;
 import dev.alex.threadium.scheduler.ThreadiumScheduler;
@@ -11,7 +12,7 @@ import net.fabricmc.loader.api.FabricLoader;
 /** Aggregate-only Phase 0 metrics. No hot-path strings or per-entity logging. */
 public final class ThreadiumMetrics {
     private static volatile ThreadiumMetrics current;
-    private final ThreadiumConfig config;
+    private volatile ThreadiumRuntimeConfig.Snapshot runtimeConfig;
     private final boolean blockEntityTimingEnabled;
     private final AtomicLong workerFailures = new AtomicLong();
     private final AtomicLong staleDiscards = new AtomicLong();
@@ -28,7 +29,7 @@ public final class ThreadiumMetrics {
     private long lastReportNanos = System.nanoTime();
 
     public ThreadiumMetrics(ThreadiumConfig config) {
-        this.config = config;
+        this.runtimeConfig = ThreadiumRuntimeConfig.effective();
         this.blockEntityTimingEnabled = !FabricLoader.getInstance().isModLoaded("sodium");
         current = this;
         StagedVertexMetrics.configure(config.metricsEnabled());
@@ -40,12 +41,12 @@ public final class ThreadiumMetrics {
 
     public static boolean isTimingEnabled() {
         ThreadiumMetrics metrics = current;
-        return metrics != null && metrics.config.metricsEnabled();
+        return metrics != null && metrics.runtimeConfig.metricsEnabled();
     }
 
     public static boolean isBlockEntityTimingEnabled() {
         ThreadiumMetrics metrics = current;
-        return metrics != null && metrics.blockEntityTimingEnabled && metrics.config.metricsEnabled();
+        return metrics != null && metrics.blockEntityTimingEnabled && metrics.runtimeConfig.metricsEnabled();
     }
 
     public static void recordWorldRenderNanos(long nanos) {
@@ -66,7 +67,7 @@ public final class ThreadiumMetrics {
 
     private static void record(int metric, long nanos) {
         ThreadiumMetrics metrics = current;
-        if (metrics == null || !metrics.config.metricsEnabled()) return;
+        if (metrics == null || !metrics.runtimeConfig.metricsEnabled()) return;
         switch (metric) {
             case 0 -> metrics.worldRender.record(nanos);
             case 1 -> metrics.entityExtraction.record(nanos);
@@ -78,7 +79,7 @@ public final class ThreadiumMetrics {
 
     public static void recordEntityVisibilityCheck(boolean visible) {
         ThreadiumMetrics metrics = current;
-        if (metrics == null || !metrics.config.metricsEnabled()) return;
+        if (metrics == null || !metrics.runtimeConfig.metricsEnabled()) return;
         metrics.entityVisibilityChecks.incrementAndGet();
         if (!visible) metrics.entityVisibilityRejected.incrementAndGet();
     }
@@ -93,31 +94,55 @@ public final class ThreadiumMetrics {
 
     private static void recordCounter(int counter) {
         ThreadiumMetrics metrics = current;
-        if (metrics == null || !metrics.config.metricsEnabled()) return;
+        if (metrics == null || !metrics.runtimeConfig.metricsEnabled()) return;
         if (counter == 0) metrics.entityRenderStatesExtracted.incrementAndGet();
         else metrics.entityStatesSubmitted.incrementAndGet();
     }
 
     public void recordWorkerFailure() {
-        if (config.metricsEnabled()) workerFailures.incrementAndGet();
+        if (runtimeConfig.metricsEnabled()) workerFailures.incrementAndGet();
     }
 
     public void recordStaleDiscard() {
-        if (config.metricsEnabled()) staleDiscards.incrementAndGet();
+        if (runtimeConfig.metricsEnabled()) staleDiscards.incrementAndGet();
     }
 
     public void recordFallback() {
-        if (config.metricsEnabled()) fallbacks.incrementAndGet();
+        if (runtimeConfig.metricsEnabled()) fallbacks.incrementAndGet();
     }
 
     public void recordDeadlineMiss() {
-        if (config.metricsEnabled()) deadlineMisses.incrementAndGet();
+        if (runtimeConfig.metricsEnabled()) deadlineMisses.incrementAndGet();
     }
 
     public void resetWorldScoped() {
         staleDiscards.set(0);
         fallbacks.set(0);
         deadlineMisses.set(0);
+    }
+
+    public void applyRuntimeConfig(ThreadiumRuntimeConfig.Snapshot snapshot) {
+        boolean wasEnabled = runtimeConfig.metricsEnabled();
+        runtimeConfig = snapshot;
+        if (wasEnabled == snapshot.metricsEnabled()) return;
+        resetAll();
+        lastReportNanos = System.nanoTime();
+        StagedVertexMetrics.configure(snapshot.metricsEnabled());
+    }
+
+    private void resetAll() {
+        workerFailures.set(0);
+        staleDiscards.set(0);
+        fallbacks.set(0);
+        deadlineMisses.set(0);
+        entityVisibilityChecks.set(0);
+        entityVisibilityRejected.set(0);
+        entityRenderStatesExtracted.set(0);
+        entityStatesSubmitted.set(0);
+        worldRender.snapshotAndReset();
+        entityExtraction.snapshotAndReset();
+        blockEntityExtraction.snapshotAndReset();
+        particleExtraction.snapshotAndReset();
     }
 
     public BenchmarkTiming benchmarkTimingSnapshotAndReset() {
@@ -135,9 +160,10 @@ public final class ThreadiumMetrics {
             TimingAccumulator.Sample particleExtraction) {}
 
     public void reportIfDue(ThreadiumScheduler scheduler, long worldGeneration, long resourceGeneration) {
-        if (!config.metricsEnabled() || dev.alex.threadium.benchmark.ThreadiumBenchmark.active()) return;
+        ThreadiumRuntimeConfig.Snapshot snapshot = runtimeConfig;
+        if (!snapshot.metricsEnabled() || dev.alex.threadium.benchmark.ThreadiumBenchmark.active()) return;
         long now = System.nanoTime();
-        if (now - lastReportNanos < config.metricsOutputIntervalSeconds() * 1_000_000_000L) return;
+        if (now - lastReportNanos < snapshot.metricsOutputIntervalSeconds() * 1_000_000_000L) return;
         lastReportNanos = now;
         TimingAccumulator.Sample world = worldRender.snapshotAndReset();
         TimingAccumulator.Sample entities = entityExtraction.snapshotAndReset();

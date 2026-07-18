@@ -28,6 +28,7 @@ public record ThreadiumConfig(
         long retainedTextMaxGpuBytes,
         int retainedTextEntryIdleSeconds,
         boolean gpuEntityEnabled,
+        int gpuMinimumGroupSubmits,
         String gpuBackend,
         int gpuMaxInstances,
         int gpuMaxBonesPerModel,
@@ -61,6 +62,7 @@ public record ThreadiumConfig(
                 64L * 1024L * 1024L,
                 60,
                 true,
+                16,
                 "auto",
                 8192,
                 128,
@@ -94,6 +96,7 @@ public record ThreadiumConfig(
                 retainedTextMaxGpuBytes,
                 retainedTextEntryIdleSeconds,
                 mode.replacementEnabled(),
+                1,
                 gpuBackend,
                 gpuMaxInstances,
                 gpuMaxBonesPerModel,
@@ -109,9 +112,24 @@ public record ThreadiumConfig(
                 metricsOutputIntervalSeconds);
     }
 
-    public static void save(ThreadiumConfig config) {
+    public static boolean save(ThreadiumConfig config) {
+        try {
+            validateEditableValues(config);
+        } catch (IllegalArgumentException exception) {
+            ThreadiumClient.LOGGER.warn("Refusing to save invalid Threadium configuration", exception);
+            return false;
+        }
         Path path = FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
-        writeConfig(path, config);
+        return writeConfig(path, config);
+    }
+
+    private static void validateEditableValues(ThreadiumConfig config) {
+        if (config.workerCountOverride < 0 || config.workerCountOverride > 4)
+            throw new IllegalArgumentException("workers.override must be between 0 and 4");
+        if (config.gpuMinimumGroupSubmits < 1 || config.gpuMinimumGroupSubmits > 65_536)
+            throw new IllegalArgumentException("entity.gpu.minimumGroupSubmits must be between 1 and 65536");
+        if (config.metricsOutputIntervalSeconds < 5 || config.metricsOutputIntervalSeconds > 3_600)
+            throw new IllegalArgumentException("metrics.output.interval.seconds must be between 5 and 3600");
     }
 
     public static ThreadiumConfig load() {
@@ -166,6 +184,7 @@ public record ThreadiumConfig(
                             1,
                             86_400),
                     booleanValue(properties, "entity.gpu.enabled", defaults.gpuEntityEnabled),
+                    boundedInt(properties, "entity.gpu.minimumGroupSubmits", defaults.gpuMinimumGroupSubmits, 1, 65536),
                     stringValue(
                             properties,
                             "entity.gpu.backend",
@@ -252,7 +271,7 @@ public record ThreadiumConfig(
         throw new IllegalArgumentException("Unsupported value for " + key);
     }
 
-    private static void writeConfig(Path path, ThreadiumConfig config) {
+    private static boolean writeConfig(Path path, ThreadiumConfig config) {
         Properties properties = new Properties();
         if (Files.exists(path)) {
             try (InputStream input = Files.newInputStream(path)) {
@@ -283,6 +302,7 @@ public record ThreadiumConfig(
         properties.setProperty(
                 "display.text.retained.entryIdleSeconds", Integer.toString(config.retainedTextEntryIdleSeconds));
         properties.setProperty("entity.gpu.enabled", Boolean.toString(config.gpuEntityEnabled));
+        properties.setProperty("entity.gpu.minimumGroupSubmits", Integer.toString(config.gpuMinimumGroupSubmits));
         properties.setProperty("entity.gpu.backend", config.gpuBackend);
         properties.setProperty("entity.gpu.maxInstances", Integer.toString(config.gpuMaxInstances));
         properties.setProperty("entity.gpu.maxBonesPerModel", Integer.toString(config.gpuMaxBonesPerModel));
@@ -308,8 +328,10 @@ public record ThreadiumConfig(
             } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
                 Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
             }
+            return true;
         } catch (IOException exception) {
             ThreadiumClient.LOGGER.warn("Could not write configuration {}", path, exception);
+            return false;
         }
     }
 }

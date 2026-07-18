@@ -3,14 +3,10 @@ package dev.alex.threadium.render.text;
 import dev.alex.threadium.ThreadiumClient;
 import dev.alex.threadium.cache.RetainedCache;
 import dev.alex.threadium.config.ThreadiumConfig;
+import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.lifecycle.ThreadiumLifecycle;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.IdentityHashMap;
 import java.util.Map;
-import java.util.Properties;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 import net.fabricmc.loader.api.FabricLoader;
@@ -29,18 +25,16 @@ public final class RetainedTextManager {
     private static RetainedCache<TextGeometryKey, PreparedResource> cache;
     private static boolean configuredEnabled, active;
     private static int maxEntries;
-    private static long maxGpuBytes, idleNanos, lastPollNanos;
-    private static Path configPath;
+    private static long maxGpuBytes, idleNanos;
     private static String inactiveReason = "not initialized";
 
     private RetainedTextManager() {}
 
     public static void initialize(ThreadiumConfig config) {
-        configuredEnabled = config.retainedTextEnabled();
+        configuredEnabled = config.enabled() && config.retainedTextEnabled();
         maxEntries = config.retainedTextMaxCacheEntries();
         maxGpuBytes = config.retainedTextMaxGpuBytes();
         idleNanos = config.retainedTextEntryIdleSeconds() * 1_000_000_000L;
-        configPath = FabricLoader.getInstance().getConfigDir().resolve("threadium.properties");
         cache = new RetainedCache<>(maxEntries, maxGpuBytes);
         evaluateCompatibility();
         ThreadiumClient.LOGGER.info(
@@ -141,33 +135,18 @@ public final class RetainedTextManager {
     public static void invalidate(String reason) {
         MARKED_LINES.clear();
         if (cache != null) evictions.addAndGet(cache.clear());
-        ThreadiumClient.LOGGER.debug("Threadium retained text cache invalidated: {}", reason);
+        if (ThreadiumRuntimeConfig.effective().debugLogging())
+            ThreadiumClient.LOGGER.debug("Threadium retained text cache invalidated: {}", reason);
     }
 
-    public static void pollRuntimeConfig() {
-        long now = System.nanoTime();
-        if (now - lastPollNanos < 1_000_000_000L) return;
-        lastPollNanos = now;
-        Properties properties = new Properties();
-        try (InputStream input = Files.newInputStream(configPath)) {
-            properties.load(input);
-        } catch (IOException | IllegalArgumentException ignored) {
-            return;
-        }
-        boolean requested = strictBoolean(properties.getProperty("display.text.retained.enabled"), configuredEnabled);
+    public static void applyRuntimeConfig(ThreadiumRuntimeConfig.Snapshot snapshot) {
+        boolean requested = snapshot.enabled() && snapshot.retainedTextEnabled();
         if (requested == configuredEnabled) return;
         configuredEnabled = requested;
         if (!requested) invalidate("runtime disable");
         evaluateCompatibility();
         ThreadiumClient.LOGGER.info(
                 "Threadium retained Text Display cache runtime state: active={}, reason={}", active, inactiveReason);
-    }
-
-    private static boolean strictBoolean(String value, boolean fallback) {
-        if (value == null) return fallback;
-        if (value.trim().equalsIgnoreCase("true")) return true;
-        if (value.trim().equalsIgnoreCase("false")) return false;
-        return fallback;
     }
 
     public static String metricsSnapshot() {

@@ -2,6 +2,7 @@ package dev.alex.threadium.render.phase;
 
 import dev.alex.threadium.ThreadiumClient;
 import dev.alex.threadium.config.ThreadiumConfig;
+import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.mixin.accessor.TranslucentFeatureRenderPhaseAccessor;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
@@ -28,6 +29,7 @@ public final class ThreadiumPhasePipeline {
     private static final ThreadLocal<Map<FeatureRenderPhase<?>, TranslucentPhaseResult>> REPLAY = new ThreadLocal<>();
     private static final PhasePipelineMetrics METRICS = new PhasePipelineMetrics();
     private static volatile ThreadiumConfig config;
+    private static volatile ThreadiumRuntimeConfig.Snapshot runtimeConfig;
     private static volatile ThreadiumPhaseScheduler scheduler;
 
     private ThreadiumPhasePipeline() {}
@@ -35,6 +37,7 @@ public final class ThreadiumPhasePipeline {
     public static synchronized void initialize(ThreadiumConfig newConfig) {
         if (scheduler != null) return;
         config = newConfig;
+        runtimeConfig = ThreadiumRuntimeConfig.effective();
         int processors = Runtime.getRuntime().availableProcessors();
         int workers = newConfig.workerCountOverride() > 0
                 ? newConfig.workerCountOverride()
@@ -62,13 +65,31 @@ public final class ThreadiumPhasePipeline {
         ThreadiumClient.LOGGER.info("Threadium phase scheduler shutdown completed");
     }
 
+    public static void applyRuntimeConfig(ThreadiumRuntimeConfig.Snapshot snapshot) {
+        runtimeConfig = snapshot;
+    }
+
+    public static synchronized void applyWorldConfiguration(ThreadiumConfig newConfig) {
+        ThreadiumPhaseScheduler previous = scheduler;
+        config = newConfig;
+        int processors = Runtime.getRuntime().availableProcessors();
+        int workers = newConfig.workerCountOverride() > 0
+                ? newConfig.workerCountOverride()
+                : Math.max(1, Math.min(4, (processors - 2) / 2));
+        scheduler = new ThreadiumPhaseScheduler(workers, newConfig.phaseQueueCapacity());
+        invalidate("world configuration applied");
+        if (previous != null) previous.shutdown();
+    }
+
     public static void drainAndPrepare(SubmitNodeStorage storage, Consumer<FeatureRenderPhase<?>> vanillaConsumer) {
         ThreadiumConfig currentConfig = config;
+        ThreadiumRuntimeConfig.Snapshot currentRuntime = runtimeConfig;
         ThreadiumPhaseScheduler currentScheduler = scheduler;
         if (currentConfig == null
                 || currentScheduler == null
-                || !currentConfig.enabled()
-                || !currentConfig.phasePipelineEnabled()
+                || currentRuntime == null
+                || !currentRuntime.enabled()
+                || !currentRuntime.phasePipelineEnabled()
                 || CIRCUIT_OPEN.get()) {
             storage.drainPhases(vanillaConsumer);
             return;
@@ -84,9 +105,13 @@ public final class ThreadiumPhasePipeline {
         storage.drainPhases(phase -> {
             int slot = entries.size();
             if (phase instanceof TranslucentFeatureRenderPhase translucent) {
-                long captureStart = System.nanoTime();
                 TranslucentFeatureRenderPhaseAccessor accessor = (TranslucentFeatureRenderPhaseAccessor) translucent;
                 List<TranslucentSubmit> liveSubmits = accessor.threadium$getSubmits();
+                if (shouldUseVanillaTranslucentPhase(liveSubmits.size(), currentConfig.minTranslucentSubmits())) {
+                    entries.add(new PhaseEntry(phase, null, null, false));
+                    return;
+                }
+                long captureStart = System.nanoTime();
                 SubmitNode[] submits = liveSubmits.toArray(new SubmitNode[0]);
                 float[] distances = accessor.threadium$getDistances().toFloatArray();
                 TranslucentPhaseSnapshot snapshot =
@@ -95,7 +120,7 @@ public final class ThreadiumPhasePipeline {
                 accessor.threadium$getDistances().clear();
                 METRICS.snapshot.record(System.nanoTime() - captureStart);
                 METRICS.submits.addAndGet(snapshot.size());
-                entries.add(createTranslucentEntry(phase, snapshot, deadline, currentConfig, currentScheduler));
+                entries.add(createTranslucentEntry(phase, snapshot, deadline, currentScheduler));
             } else {
                 entries.add(new PhaseEntry(phase, null, null, false));
             }
@@ -118,10 +143,7 @@ public final class ThreadiumPhasePipeline {
             FeatureRenderPhase<?> phase,
             TranslucentPhaseSnapshot snapshot,
             long deadline,
-            ThreadiumConfig currentConfig,
             ThreadiumPhaseScheduler currentScheduler) {
-        if (snapshot.size() < currentConfig.minTranslucentSubmits())
-            return new PhaseEntry(phase, snapshot, null, false);
         long submitted = System.nanoTime();
         PhaseTask<TranslucentPhaseSnapshot, TranslucentPhaseResult> task = new PhaseTask<>(
                 snapshot.generation(),
@@ -139,6 +161,10 @@ public final class ThreadiumPhasePipeline {
             task.selectSynchronousFallback();
         }
         return new PhaseEntry(phase, snapshot, task, accepted);
+    }
+
+    static boolean shouldUseVanillaTranslucentPhase(int submitCount, int minimumSubmits) {
+        return submitCount < minimumSubmits;
     }
 
     private static TranslucentPhaseResult processAsync(TranslucentPhaseSnapshot snapshot, long submitted) {

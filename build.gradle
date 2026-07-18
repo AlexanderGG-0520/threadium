@@ -48,6 +48,12 @@ dependencies {
     if (providers.gradleProperty('threadium.sodium').isPresent()) {
         runtimeOnly 'maven.modrinth:AANobbMI:2Yom1N68'
     }
+    if (providers.gradleProperty('threadium.sodiumExtra').isPresent()) {
+        runtimeOnly 'maven.modrinth:PtjYWJkn:89QZEr2e'
+    }
+    if (providers.gradleProperty('threadium.immediatelyfast').isPresent()) {
+        runtimeOnly 'maven.modrinth:5ZwdcRci:uJHxuQxy'
+    }
     testImplementation platform('org.junit:junit-bom:5.13.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

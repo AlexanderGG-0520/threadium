@@ -4,6 +4,7 @@ import dev.alex.threadium.benchmark.BenchmarkStartupOwnership;
 import dev.alex.threadium.benchmark.ThreadiumBenchmark;
 import dev.alex.threadium.benchmark.ThreadiumBenchmarkCommands;
 import dev.alex.threadium.config.ThreadiumConfig;
+import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.lifecycle.ThreadiumLifecycle;
 import dev.alex.threadium.metrics.ThreadiumMetrics;
 import dev.alex.threadium.render.modelpart.ModelPartRenderService;
@@ -21,6 +22,7 @@ public final class ThreadiumClient implements ClientModInitializer {
         ThreadiumConfig config = benchmarkMode
                 .map(mode -> ThreadiumConfig.load().forBenchmark(mode))
                 .orElseGet(ThreadiumConfig::load);
+        ThreadiumRuntimeConfig.initialize(config);
         ThreadiumMetrics metrics = new ThreadiumMetrics(config);
         ThreadiumBenchmarkCommands.register();
         benchmarkMode.ifPresent(mode -> {

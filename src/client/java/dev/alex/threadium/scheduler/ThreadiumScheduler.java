@@ -1,6 +1,7 @@
 package dev.alex.threadium.scheduler;
 
 import dev.alex.threadium.ThreadiumClient;
+import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.metrics.ThreadiumMetrics;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadFactory;
@@ -35,7 +36,8 @@ public final class ThreadiumScheduler {
                 factory,
                 (task, ignored) -> {
                     metrics.recordDeadlineMiss();
-                    ThreadiumClient.LOGGER.debug("Threadium rejected a bounded work item");
+                    if (ThreadiumRuntimeConfig.effective().debugLogging())
+                        ThreadiumClient.LOGGER.debug("Threadium rejected a bounded work item");
                 });
         executor.allowCoreThreadTimeOut(true);
     }

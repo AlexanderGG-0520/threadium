@@ -21,7 +21,7 @@ abstract class RenderTypeFeatureRendererMixin {
             FeatureFrameContext context, List<? extends SubmitNode> submits, boolean ordered, CallbackInfo ci) {
         if ((Object) this instanceof ModelFeatureRenderer) {
             ModelPartRenderService service = ModelPartRenderService.get();
-            if (service != null) service.beginGroup(ordered);
+            if (service != null && service.replacementEnabled()) service.beginGroup(ordered, submits.size());
         }
     }
 
@@ -33,7 +33,7 @@ abstract class RenderTypeFeatureRendererMixin {
             FeatureFrameContext context, List<? extends SubmitNode> submits, boolean ordered, CallbackInfo ci) {
         if ((Object) this instanceof ModelFeatureRenderer) {
             ModelPartRenderService service = ModelPartRenderService.get();
-            if (service != null) service.endGroup();
+            if (service != null && service.replacementEnabled()) service.endGroup();
         }
     }
     /** Flushes accepted opaque/cutout model batches at the matching feature execution boundary. */
@@ -49,7 +49,7 @@ abstract class RenderTypeFeatureRendererMixin {
             CallbackInfo ci) {
         if ((Object) this instanceof ModelFeatureRenderer) {
             ModelPartRenderService service = ModelPartRenderService.get();
-            if (service != null) service.flush();
+            if (service != null && service.replacementEnabled()) service.flush();
         }
     }
 }

@@ -8,6 +8,7 @@ import net.minecraft.network.chat.Component;
 /** Small dependency-free configuration screen exposed through Mod Menu. */
 public final class ThreadiumConfigScreen extends Screen {
     private static final int[] METRICS_INTERVALS = {5, 15, 30, 60, 120, 300};
+    private static final int[] GPU_GROUP_MINIMUMS = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024};
 
     private final Screen parent;
     private final ThreadiumConfig original;
@@ -21,8 +22,10 @@ public final class ThreadiumConfigScreen extends Screen {
     private boolean gpuEntityEnabled;
     private boolean gpuAllowVanillaFallback;
     private boolean gpuBatchConsolidation;
+    private int gpuMinimumGroupSubmits;
     private int workerCountOverride;
     private int metricsOutputIntervalSeconds;
+    private Component saveError;
 
     public ThreadiumConfigScreen(Screen parent) {
         super(Component.literal("Threadium Configuration"));
@@ -37,6 +40,7 @@ public final class ThreadiumConfigScreen extends Screen {
         this.gpuEntityEnabled = original.gpuEntityEnabled();
         this.gpuAllowVanillaFallback = original.gpuAllowVanillaFallback();
         this.gpuBatchConsolidation = original.gpuBatchConsolidation();
+        this.gpuMinimumGroupSubmits = original.gpuMinimumGroupSubmits();
         this.workerCountOverride = original.workerCountOverride();
         this.metricsOutputIntervalSeconds = original.metricsOutputIntervalSeconds();
     }
@@ -135,6 +139,13 @@ public final class ThreadiumConfigScreen extends Screen {
                 .pos(left, y)
                 .size(buttonWidth, 20)
                 .build());
+        this.addRenderableWidget(Button.builder(gpuGroupMinimumLabel(), button -> {
+                    gpuMinimumGroupSubmits = nextGpuGroupMinimum(gpuMinimumGroupSubmits);
+                    button.setMessage(gpuGroupMinimumLabel());
+                })
+                .pos(right, y)
+                .size(buttonWidth, 20)
+                .build());
 
         int actionY = Math.min(this.height - 28, y + 30);
         this.addRenderableWidget(Button.builder(Component.literal("Cancel"), button -> closeToParent())
@@ -153,10 +164,12 @@ public final class ThreadiumConfigScreen extends Screen {
         graphics.centeredText(this.font, this.title, this.width / 2, 10, 0xFFFFFFFF);
         graphics.centeredText(
                 this.font,
-                Component.literal("Restart Minecraft to apply every setting."),
+                Component.literal("Save applies live; renderer: next frame; workers: next world."),
                 this.width / 2,
                 24,
                 0xFFAAAAAA);
+        if (saveError != null)
+            graphics.centeredText(this.font, saveError, this.width / 2, this.height - 10, 0xFFFF5555);
     }
 
     @Override
@@ -165,7 +178,13 @@ public final class ThreadiumConfigScreen extends Screen {
     }
 
     private void saveAndClose() {
-        ThreadiumConfig.save(buildConfig());
+        ThreadiumConfig config = buildConfig();
+        if (!ThreadiumConfig.save(config)) {
+            saveError = Component.literal("Could not save threadium.properties; previous settings remain active.");
+            return;
+        }
+        ThreadiumRuntimeConfig.publishSaved(config);
+        dev.alex.threadium.lifecycle.ThreadiumLifecycle.applyPublishedConfiguration();
         closeToParent();
     }
 
@@ -191,6 +210,7 @@ public final class ThreadiumConfigScreen extends Screen {
                 original.retainedTextMaxGpuBytes(),
                 original.retainedTextEntryIdleSeconds(),
                 gpuEntityEnabled,
+                gpuMinimumGroupSubmits,
                 original.gpuBackend(),
                 original.gpuMaxInstances(),
                 original.gpuMaxBonesPerModel(),
@@ -214,8 +234,21 @@ public final class ThreadiumConfigScreen extends Screen {
         return Component.literal("Metrics interval: " + metricsOutputIntervalSeconds + "s");
     }
 
+    private Component gpuGroupMinimumLabel() {
+        return Component.literal("GPU group minimum: " + gpuMinimumGroupSubmits);
+    }
+
     private static Component toggle(String label, boolean value) {
         return Component.literal(label + ": " + (value ? "ON" : "OFF"));
+    }
+
+    private static int nextGpuGroupMinimum(int current) {
+        for (int i = 0; i < GPU_GROUP_MINIMUMS.length; i++) {
+            if (GPU_GROUP_MINIMUMS[i] == current) {
+                return GPU_GROUP_MINIMUMS[(i + 1) % GPU_GROUP_MINIMUMS.length];
+            }
+        }
+        return 16;
     }
 
     private static int nextInterval(int current) {

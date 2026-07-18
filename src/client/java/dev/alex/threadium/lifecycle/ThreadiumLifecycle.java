@@ -2,6 +2,7 @@ package dev.alex.threadium.lifecycle;
 
 import dev.alex.threadium.ThreadiumClient;
 import dev.alex.threadium.config.ThreadiumConfig;
+import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.metrics.ThreadiumMetrics;
 import dev.alex.threadium.render.modelpart.ModelPartRenderService;
 import dev.alex.threadium.render.phase.ThreadiumPhasePipeline;
@@ -35,16 +36,14 @@ public final class ThreadiumLifecycle {
         scheduler = new ThreadiumScheduler(config.workerCountOverride(), metrics);
         ThreadiumPhasePipeline.initialize(config);
         RetainedTextManager.initialize(config);
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> advanceWorldGeneration("world join"));
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> advanceWorldGeneration("world disconnect"));
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> applyWorldBoundary("world join"));
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> applyWorldBoundary("world disconnect"));
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> shutdown(client));
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             dev.alex.threadium.benchmark.ThreadiumBenchmark.tick(client);
             dev.alex.threadium.benchmark.PipelineDifferentialRunner.tick();
             if (metrics != null && scheduler != null)
                 metrics.reportIfDue(scheduler, worldGeneration(), resourceGeneration());
-            RetainedTextManager.pollRuntimeConfig();
-            if (!dev.alex.threadium.benchmark.ThreadiumBenchmark.active()) ModelPartRenderService.pollRuntimeConfig();
         });
         ThreadiumClient.LOGGER.info("Benchmark tick callback registered: true");
         ResourceManagerHelper.get(PackType.CLIENT_RESOURCES).registerReloadListener(new ReloadGenerationListener());
@@ -56,6 +55,41 @@ public final class ThreadiumLifecycle {
 
     public static long resourceGeneration() {
         return RESOURCE_GENERATION.current();
+    }
+
+    /** Called by the config screen only after the atomic file replacement succeeded. */
+    public static void applyPublishedConfiguration() {
+        ThreadiumRuntimeConfig.Snapshot snapshot = ThreadiumRuntimeConfig.effective();
+        if (metrics != null) metrics.applyRuntimeConfig(snapshot);
+    }
+
+    /** GameRenderer HEAD is after all commands from the preceding frame have been submitted. */
+    public static void beginRenderFrame() {
+        ThreadiumRuntimeConfig.Transition transition = ThreadiumRuntimeConfig.applyFrameBoundary(true);
+        if (transition.applied()) {
+            ThreadiumRuntimeConfig.Snapshot snapshot = transition.after();
+            if (metrics != null) metrics.applyRuntimeConfig(snapshot);
+            ThreadiumPhasePipeline.applyRuntimeConfig(snapshot);
+            RetainedTextManager.applyRuntimeConfig(snapshot);
+        }
+        // Also consumes immediate GPU threshold/consolidation changes published since the last frame.
+        if (!dev.alex.threadium.benchmark.ThreadiumBenchmark.active()) ModelPartRenderService.applyRuntimeConfig();
+    }
+
+    private static void applyWorldBoundary(String reason) {
+        ThreadiumRuntimeConfig.Transition transition = ThreadiumRuntimeConfig.applyWorldBoundary();
+        ThreadiumConfig persisted = ThreadiumRuntimeConfig.persisted();
+        if (transition.changed()) {
+            ThreadiumRuntimeConfig.Snapshot snapshot = transition.after();
+            if (metrics != null) metrics.applyRuntimeConfig(snapshot);
+            ThreadiumPhasePipeline.applyRuntimeConfig(snapshot);
+            RetainedTextManager.applyRuntimeConfig(snapshot);
+            if (!dev.alex.threadium.benchmark.ThreadiumBenchmark.active()) ModelPartRenderService.applyRuntimeConfig();
+        }
+        if (scheduler != null) scheduler.shutdown();
+        scheduler = new ThreadiumScheduler(persisted.workerCountOverride(), metrics);
+        ThreadiumPhasePipeline.applyWorldConfiguration(persisted);
+        advanceWorldGeneration(reason);
     }
 
     private static void advanceWorldGeneration(String reason) {

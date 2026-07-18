@@ -16,6 +16,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 abstract class GameRendererMixin {
     @Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("HEAD"), require = 1)
     private void threadium$benchmarkFrameStart(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
+        dev.alex.threadium.lifecycle.ThreadiumLifecycle.beginRenderFrame();
         dev.alex.threadium.benchmark.ThreadiumBenchmark.frameStart(Minecraft.getInstance());
     }
 
