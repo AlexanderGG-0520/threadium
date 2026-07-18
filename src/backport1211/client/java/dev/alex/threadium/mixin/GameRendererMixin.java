@@ -10,9 +10,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(GameRenderer.class)
 abstract class GameRendererMixin {
-    @Inject(method = "render", at = @At("HEAD"))
-    private void threadium$applyFrameBoundary(
-            RenderTickCounter tickCounter, boolean tick, CallbackInfo callbackInfo) {
+    @Inject(method = "render(Lnet/minecraft/client/render/RenderTickCounter;Z)V", at = @At("HEAD"), require = 1)
+    private void threadium$applyFrameBoundary(RenderTickCounter tickCounter, boolean tick, CallbackInfo callbackInfo) {
         ThreadiumFrameBoundary.applyPendingConfiguration();
     }
 }

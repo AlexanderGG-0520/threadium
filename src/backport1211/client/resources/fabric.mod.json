@@ -29,6 +29,6 @@
     "java": ">=21"
   },
   "suggests": {
-    "modmenu": ">=11.0.3"
+    "modmenu": ">=11.0.4"
   }
 }

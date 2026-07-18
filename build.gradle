@@ -1,5 +1,5 @@
 plugins {
-    id 'net.fabricmc.fabric-loom' version "${loom_version}"
+    id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
     id 'maven-publish'
     id 'com.diffplug.spotless' version '8.8.0'
 }
@@ -23,6 +23,11 @@ repositories {
 
 loom {
     splitEnvironmentSourceSets()
+    runs {
+        client {
+            runDir = 'run-1.21.1'
+        }
+    }
     mods {
         threadium {
             sourceSet sourceSets.main
@@ -42,6 +47,10 @@ sourceSets {
         java.setSrcDirs(['src/backport1211/client/java'])
         resources.setSrcDirs(['src/backport1211/client/resources'])
     }
+    test {
+        java.setSrcDirs(['src/backport1211/test/java'])
+        resources.setSrcDirs(['src/backport1211/test/resources'])
+    }
 }
 
 dependencies {
@@ -49,8 +58,6 @@ dependencies {
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
     modImplementation "net.fabricmc:fabric-loader:${project.fabric_loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-    modImplementation "com.terraformersmc:modmenu:${project.modmenu_version}"
-
     testImplementation platform('org.junit:junit-bom:5.13.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
@@ -58,6 +65,17 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+}
+
+tasks.register('ensureBackportMainOutputs') {
+    doLast {
+        layout.buildDirectory.dir('classes/java/main').get().asFile.mkdirs()
+        layout.buildDirectory.dir('resources/main').get().asFile.mkdirs()
+    }
+}
+
+tasks.named('runClient') {
+    dependsOn tasks.named('ensureBackportMainOutputs')
 }
 
 spotless {
