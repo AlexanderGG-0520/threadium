@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "threadium",
+  "version": "${version}",
+  "name": "Threadium",
+  "description": "Minecraft 1.21.1 backport bootstrap for safe ModelPart rendering optimization.",
+  "authors": [
+    "AlexanderGG"
+  ],
+  "contact": {
+    "homepage": "https://github.com/AlexanderGG-0520/threadium",
+    "sources": "https://github.com/AlexanderGG-0520/threadium",
+    "issues": "https://github.com/AlexanderGG-0520/threadium/issues"
+  },
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.alex.threadium.ThreadiumClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.14",
+    "fabric-api": ">=0.116.14+1.21.1",
+    "minecraft": "1.21.1",
+    "java": ">=21"
+  },
+  "suggests": {
+    "modmenu": ">=11.0.3"
+  }
+}
