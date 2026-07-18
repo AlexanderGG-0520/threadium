@@ -19,15 +19,6 @@ repositories {
         name = 'TerraformersMC'
         url = 'https://maven.terraformersmc.com/'
     }
-    exclusiveContent {
-        forRepository {
-            maven {
-                name = 'Modrinth'
-                url = 'https://api.modrinth.com/maven'
-            }
-        }
-        filter { includeGroup 'maven.modrinth' }
-    }
 }
 
 loom {
@@ -40,20 +31,26 @@ loom {
     }
 }
 
+// Keep the completed 26.2 implementation intact while the 1.21.1 port is rebuilt
+// behind a minimal, compiling pass-through source set.
+sourceSets {
+    main {
+        java.setSrcDirs(['src/backport1211/main/java'])
+        resources.setSrcDirs(['src/backport1211/main/resources'])
+    }
+    client {
+        java.setSrcDirs(['src/backport1211/client/java'])
+        resources.setSrcDirs(['src/backport1211/client/resources'])
+    }
+}
+
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    implementation "net.fabricmc:fabric-loader:${project.fabric_loader_version}"
-    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-    implementation "com.terraformersmc:modmenu:${project.modmenu_version}"
-    if (providers.gradleProperty('threadium.sodium').isPresent()) {
-        runtimeOnly 'maven.modrinth:AANobbMI:2Yom1N68'
-    }
-    if (providers.gradleProperty('threadium.sodiumExtra').isPresent()) {
-        runtimeOnly 'maven.modrinth:PtjYWJkn:89QZEr2e'
-    }
-    if (providers.gradleProperty('threadium.immediatelyfast').isPresent()) {
-        runtimeOnly 'maven.modrinth:5ZwdcRci:uJHxuQxy'
-    }
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.fabric_loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    modImplementation "com.terraformersmc:modmenu:${project.modmenu_version}"
+
     testImplementation platform('org.junit:junit-bom:5.13.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
@@ -65,7 +62,7 @@ tasks.named('test') {
 
 spotless {
     java {
-        target 'src/**/*.java'
+        target 'src/backport1211/**/*.java'
         palantirJavaFormat('2.96.0').style('PALANTIR').formatJavadoc(true)
         trimTrailingWhitespace()
         endWithNewline()
@@ -74,7 +71,7 @@ spotless {
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(25)
+        languageVersion = JavaLanguageVersion.of(21)
     }
     withSourcesJar()
 }
@@ -86,7 +83,7 @@ tasks.withType(Jar).configureEach {
 }
 
 tasks.withType(JavaCompile).configureEach {
-    options.release = 25
+    options.release = 21
     options.encoding = 'UTF-8'
 }
 
@@ -94,41 +91,5 @@ tasks.withType(ProcessResources).configureEach {
     inputs.property 'version', expandedModVersion
     filesMatching('fabric.mod.json') {
         expand 'version': expandedModVersion
-    }
-}
-
-// Loom includes the main resource output for the shared main/client mod source set.
-// With no main resources Gradle skips processResources, so create only its declared output directory.
-def mainResourcesDirectory = layout.buildDirectory.dir('resources/main')
-def ensureMainResourcesDirectory = tasks.register('ensureMainResourcesDirectory') {
-    outputs.dir(mainResourcesDirectory)
-    doLast {
-        mainResourcesDirectory.get().asFile.mkdirs()
-    }
-}
-
-tasks.matching { it.name == 'configureClientLaunch' }.configureEach {
-    dependsOn(ensureMainResourcesDirectory)
-}
-
-tasks.matching { it.name == 'compileClientJava' }.configureEach {
-    dependsOn(ensureMainResourcesDirectory)
-}
-
-tasks.named('runClient').configure {
-    def benchmarkMode = providers.gradleProperty('threadiumBenchmarkMode')
-    if (benchmarkMode.isPresent()) {
-        jvmArgs "-Dthreadium.benchmark.mode=${benchmarkMode.get()}"
-        ['scene', 'trial', 'entities', 'setupSeconds', 'warmupSeconds', 'measurementSeconds', 'maxSamples', 'bootstrap', 'autoExit'].each { key ->
-            def property = providers.gradleProperty("threadiumBenchmark${key.capitalize()}")
-            if (property.isPresent()) jvmArgs "-Dthreadium.benchmark.${key}=${property.get()}"
-        }
-    }
-    [
-        threadiumProfileIntercept: 'threadium.modelpart.profileIntercept',
-        threadiumProfileFlush: 'threadium.modelpart.profileFlush'
-    ].each { gradleProperty, systemProperty ->
-        def property = providers.gradleProperty(gradleProperty)
-        if (property.isPresent()) jvmArgs "-D${systemProperty}=${property.get()}"
     }
 }
