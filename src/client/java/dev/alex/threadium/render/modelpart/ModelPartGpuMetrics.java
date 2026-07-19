@@ -91,6 +91,15 @@ public final class ModelPartGpuMetrics {
     public final LongAdder poseLookupNanos = new LongAdder(),
             boneCompositionNanos = new LongAdder(),
             bonePackingNanos = new LongAdder();
+    public final LongAdder backendQueueProfileCount = new LongAdder(),
+            backendQueuePrepareCalls = new LongAdder(),
+            backendQueuePrepareReuseHits = new LongAdder(),
+            backendQueueSelectorNanos = new LongAdder(),
+            backendQueuePrecheckNanos = new LongAdder(),
+            backendQueuePrepareNanos = new LongAdder(),
+            backendQueuePreparedValidationNanos = new LongAdder(),
+            backendQueueInstanceCaptureNanos = new LongAdder(),
+            backendQueueInsertionAndPaletteNanos = new LongAdder();
     public final LongAdder blaze3dFlushCount = new LongAdder(),
             blaze3dFlushTotalNanos = new LongAdder(),
             blaze3dBoneAndInstancePackingNanos = new LongAdder(),
@@ -141,6 +150,20 @@ public final class ModelPartGpuMetrics {
         interceptPosePreparationNanos.add(posePreparationNanos);
         interceptMaterialCaptureNanos.add(materialCaptureNanos);
         interceptBackendQueueNanos.add(backendQueueNanos);
+    }
+
+    void recordBackendQueueTiming(
+            long precheckNanos,
+            long prepareNanos,
+            long preparedValidationNanos,
+            long instanceCaptureNanos,
+            long insertionAndPaletteNanos) {
+        backendQueueProfileCount.increment();
+        backendQueuePrecheckNanos.add(precheckNanos);
+        backendQueuePrepareNanos.add(prepareNanos);
+        backendQueuePreparedValidationNanos.add(preparedValidationNanos);
+        backendQueueInstanceCaptureNanos.add(instanceCaptureNanos);
+        backendQueueInsertionAndPaletteNanos.add(insertionAndPaletteNanos);
     }
 
     void pipelineAccepted(ModelPartPipelineDescriptor descriptor) {

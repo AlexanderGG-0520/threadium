@@ -1,7 +1,10 @@
 package dev.alex.threadium.render.modelpart;
 
 import com.mojang.blaze3d.pipeline.RenderPipeline;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import net.minecraft.client.renderer.RenderPipelines;
 
 /** Canonical Vanilla 26.2 pipelines proven to receive ModelFeatureRenderer geometry. */
@@ -30,6 +33,7 @@ enum ModelPartPipelineDescriptor {
 
     static final List<RenderPipeline> SOURCES =
             List.of(values()).stream().map(ModelPartPipelineDescriptor::source).toList();
+    private static final Map<RenderPipeline, ModelPartPipelineDescriptor> BY_SOURCE = buildSourceLookup();
 
     private final RenderPipeline source;
     private final ShaderMode shaderMode;
@@ -107,9 +111,29 @@ enum ModelPartPipelineDescriptor {
         return shaderMode.lightmap || this == ENERGY_SWIRL;
     }
 
+    /**
+     * Minecraft 26.2 prepare() snapshots textures/samplers, dynamic transforms, and scissor state. These three ordinary
+     * entity types have fixed texture-transform/layering policy and may reuse that snapshot only for the same
+     * RenderType identity during one ModelFeatureRenderer preparation group. All other descriptors fail closed.
+     */
+    boolean allowsGroupLocalPreparedReuse() {
+        return this == ENTITY_SOLID || this == ENTITY_CUTOUT_CULL || this == ENTITY_CUTOUT;
+    }
+
     static ModelPartPipelineDescriptor from(RenderPipeline pipeline) {
-        for (ModelPartPipelineDescriptor descriptor : values()) if (descriptor.source == pipeline) return descriptor;
-        return null;
+        return BY_SOURCE.get(pipeline);
+    }
+
+    private static Map<RenderPipeline, ModelPartPipelineDescriptor> buildSourceLookup() {
+        IdentityHashMap<RenderPipeline, ModelPartPipelineDescriptor> lookup = new IdentityHashMap<>();
+        for (ModelPartPipelineDescriptor descriptor : values()) {
+            ModelPartPipelineDescriptor existing = lookup.put(descriptor.source, descriptor);
+            if (existing != null) {
+                throw new IllegalStateException(
+                        "Duplicate ModelPart source pipeline identity: " + existing + " and " + descriptor);
+            }
+        }
+        return Collections.unmodifiableMap(lookup);
     }
 
     enum Ordering {

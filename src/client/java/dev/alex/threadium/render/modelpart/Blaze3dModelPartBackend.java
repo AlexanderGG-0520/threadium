@@ -57,6 +57,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
     private static final AtomicInteger TOKENS = new AtomicInteger();
     private static final List<RenderPipeline> SOURCES = ModelPartPipelineDescriptor.SOURCES;
     private static final boolean PROFILE_FLUSH = Boolean.getBoolean("threadium.modelpart.profileFlush");
+    private static final boolean PROFILE_QUEUE = Boolean.getBoolean("threadium.modelpart.profileIntercept");
     private final BackendStateMachine states = new BackendStateMachine(ModelPartBackendState.UNINITIALIZED);
     private final int maxInstances, maxBones;
     private final boolean consolidate;
@@ -66,6 +67,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
     private final Map<MeshHandle, Mesh> meshes = new java.util.HashMap<>();
     private final IdentityHashMap<RenderPipeline, RenderPipeline> pipelines = new IdentityHashMap<>();
     private final PipelineValidityTable<RenderPipeline> validity = new PipelineValidityTable<>();
+    private final GroupLocalPreparedRenderTypeCache recentPrepared = new GroupLocalPreparedRenderTypeCache();
     private final IdentityHashMap<ModelPartBoneData, Integer> framePaletteOffsets = new IdentityHashMap<>();
     private final IdentityHashMap<ModelPartBoneData, Boolean> uploadedFramePalettes = new IdentityHashMap<>();
     private final ArrayList<PlannedDraw> plannedDraws = new ArrayList<>();
@@ -273,15 +275,8 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
             metrics.blaze3dPipelineValidityUnknown.increment();
             return PipelineValidity.uninitialized(requestedGeneration);
         }
-        RenderPipeline source;
-        try {
-            source = type.prepare().pipeline();
-        } catch (Throwable failure) {
-            metrics.blaze3dPipelineValidityUnknown.increment();
-            return new PipelineValidity(
-                    PipelineValidityState.UNSUPPORTED_BACKEND, requestedGeneration, failure.toString());
-        }
-        PipelineValidity result = supported(source)
+        RenderPipeline source = type.pipeline();
+        PipelineValidity result = ModelPartPipelineDescriptor.from(source) != null
                 ? validity.get(source, requestedGeneration)
                 : new PipelineValidity(
                         PipelineValidityState.UNSUPPORTED_BACKEND, requestedGeneration, "unsupported source pipeline");
@@ -297,6 +292,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
 
     @Override
     public void invalidatePipelines(long nextGeneration) {
+        recentPrepared.clear();
         validity.markStale(nextGeneration);
         generation = nextGeneration;
         pipelinesNeedCompilation = true;
@@ -343,54 +339,84 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
             int tint,
             ModelPartUvTransform uvTransform,
             ModelPartDecalTransform decalTransform) {
+        long precheckStart = queueProfileNow();
         if (!state().accepts()
                 || !(renderType instanceof RenderType type)
                 || !meshes.containsKey(mesh)
                 || queued.size() >= maxInstances) return false;
+        recentPrepared.observe(type);
         int count = bones.matrices().length / 28;
         Integer existingBase = framePaletteOffsets.get(bones);
         if (existingBase == null && frameBoneCount + count > maxBones) return false;
-        PreparedRenderType prepared;
-        try {
-            prepared = type.prepare();
-            ModelPartPipelineDescriptor descriptor = ModelPartPipelineDescriptor.from(prepared.pipeline());
-            if (descriptor == null
-                    || descriptor.submissionPolicy()
-                            == ModelPartPipelineDescriptor.SubmissionPolicy.SORTED_QUAD_STREAM
-                            != type.sortOnUpload()
-                    || !validity.get(prepared.pipeline(), generation).permitsReplacement(generation)
-                    || pipelineFor(prepared.pipeline()) == null
-                    || ((descriptor == ModelPartPipelineDescriptor.CRUMBLING) != (decalTransform != null))) {
-                unsupported(prepared.pipeline());
-                return false;
-            }
-        } catch (Throwable unsupported) {
-            metrics.blaze3dUnsupportedFallbacks.increment();
+        RenderPipeline source = type.pipeline();
+        ModelPartPipelineDescriptor descriptor = ModelPartPipelineDescriptor.from(source);
+        if (descriptor == null
+                || descriptor.submissionPolicy()
+                        == ModelPartPipelineDescriptor.SubmissionPolicy.SORTED_QUAD_STREAM
+                        != type.sortOnUpload()
+                || !validity.get(source, generation).permitsReplacement(generation)
+                || pipelineFor(source, descriptor) == null
+                || ((descriptor == ModelPartPipelineDescriptor.CRUMBLING) != (decalTransform != null))) {
+            unsupported(source);
             return false;
         }
+        long prepareStart = queueProfileNow();
+        PreparedRenderType prepared = descriptor.allowsGroupLocalPreparedReuse()
+                ? recentPrepared.reuse(type, descriptor, source, generation, groupId)
+                : null;
+        if (prepared != null) {
+            metrics.backendQueuePrepareReuseHits.increment();
+        } else {
+            recentPrepared.clear();
+            metrics.backendQueuePrepareCalls.increment();
+            try {
+                prepared = type.prepare();
+            } catch (Throwable unsupported) {
+                metrics.blaze3dUnsupportedFallbacks.increment();
+                return false;
+            }
+        }
+        long preparedValidationStart = queueProfileNow();
+        if (prepared.pipeline() != source) {
+            recentPrepared.clear();
+            unsupported(prepared.pipeline());
+            return false;
+        }
+        if (descriptor.allowsGroupLocalPreparedReuse()
+                && !recentPrepared.install(type, descriptor, source, prepared, generation, groupId)) {
+            unsupported(prepared.pipeline());
+            return false;
+        }
+        long instanceCaptureStart = queueProfileNow();
         int decalBase = decalTransform == null ? -1 : frameDecalCount++;
-        queued.add(new Queued(
-                new ModelPartBatchKey(mesh, type, epoch, groupId),
-                mesh,
-                type,
-                prepared,
-                new Matrix4f(rootPose),
-                bones,
-                light,
-                overlay,
-                tint,
-                uvTransform,
-                decalTransform,
-                decalBase));
+        ModelPartBatchKey key = new ModelPartBatchKey(mesh, type, epoch, groupId);
+        Matrix4f pose = new Matrix4f(rootPose);
+        Queued entry = new Queued(
+                key, mesh, type, prepared, pose, bones, light, overlay, tint, uvTransform, decalTransform, decalBase);
+        long insertionStart = queueProfileNow();
+        queued.add(entry);
         if (existingBase == null) {
             framePaletteOffsets.put(bones, frameBoneCount);
             frameBoneCount = Math.addExact(frameBoneCount, count);
         }
+        long insertionEnd = queueProfileNow();
+        if (PROFILE_QUEUE)
+            metrics.recordBackendQueueTiming(
+                    prepareStart - precheckStart,
+                    preparedValidationStart - prepareStart,
+                    instanceCaptureStart - preparedValidationStart,
+                    insertionStart - instanceCaptureStart,
+                    insertionEnd - insertionStart);
         return true;
+    }
+
+    private static long queueProfileNow() {
+        return PROFILE_QUEUE ? System.nanoTime() : 0L;
     }
 
     @Override
     public void beginFrame() {
+        recentPrepared.clear();
         if (!queued.isEmpty()) {
             fail();
             return;
@@ -410,12 +436,16 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
         }
     }
 
-    private static boolean supported(RenderPipeline pipeline) {
-        return ModelPartPipelineDescriptor.from(pipeline) != null;
+    private RenderPipeline pipelineFor(RenderPipeline source) {
+        return pipelineFor(source, ModelPartPipelineDescriptor.from(source));
     }
 
-    private RenderPipeline pipelineFor(RenderPipeline source) {
-        return pipelines.computeIfAbsent(source, p -> createPipeline(ModelPartPipelineDescriptor.from(p)));
+    private RenderPipeline pipelineFor(RenderPipeline source, ModelPartPipelineDescriptor descriptor) {
+        RenderPipeline pipeline = pipelines.get(source);
+        if (pipeline != null || descriptor == null) return pipeline;
+        pipeline = createPipeline(descriptor);
+        if (pipeline != null) pipelines.put(source, pipeline);
+        return pipeline;
     }
 
     private static RenderPipeline createPipeline(ModelPartPipelineDescriptor descriptor) {
@@ -467,6 +497,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
 
     @Override
     public void beginGroup(boolean strictlyOrdered) {
+        recentPrepared.clear();
         groupStart = queued.size();
         groupId++;
         groups.addLast(new Group(-1, strictlyOrdered));
@@ -476,6 +507,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
     public void endGroup() {
         Group pending = groups.removeLast();
         groups.addLast(new Group(queued.size() - groupStart, pending.strictlyOrdered));
+        recentPrepared.clear();
     }
 
     @Override
@@ -981,6 +1013,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
 
     @Override
     public void clear() {
+        recentPrepared.clear();
         queued.clear();
         groups.clear();
         clearPlanningScratch();
@@ -1006,6 +1039,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
     }
 
     private void fail() {
+        recentPrepared.clear();
         ModelPartBackendState state = state();
         if (state == ModelPartBackendState.INITIALIZING
                 || state == ModelPartBackendState.READY

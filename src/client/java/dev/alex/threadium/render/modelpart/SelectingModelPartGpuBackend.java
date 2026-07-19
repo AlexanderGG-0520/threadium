@@ -3,19 +3,24 @@ package dev.alex.threadium.render.modelpart;
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.alex.threadium.ThreadiumClient;
 import java.util.ArrayDeque;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import org.joml.Matrix4fc;
 
 /** One-shot active-context capability selection; explicit reset is performed by replacing this object. */
 public final class SelectingModelPartGpuBackend implements ModelPartGpuBackend {
+    private static final boolean PROFILE_QUEUE = Boolean.getBoolean("threadium.modelpart.profileIntercept");
     private final BackendStateMachine states;
     private final String requested;
     private final int maxInstances, maxBones;
     private final boolean consolidate;
     private final DebugVisualMode debugMode;
     private final ModelPartGpuMetrics metrics;
+    private final BooleanSupplier renderThreadCheck;
+    private final Supplier<ModelPartGpuBackend> backendFactory;
     private final InitializationAttemptGuard attemptGuard = new InitializationAttemptGuard();
     private final ArrayDeque<Integer> groupCounts = new ArrayDeque<>();
-    private ModelPartGpuBackend delegate;
+    private volatile ModelPartGpuBackend delegate;
     private String selected = "none";
     private int queuedCount, groupStart;
     private long generation;
@@ -29,12 +34,36 @@ public final class SelectingModelPartGpuBackend implements ModelPartGpuBackend {
             DebugVisualMode debugMode,
             boolean enabled,
             ModelPartGpuMetrics metrics) {
+        this(
+                requested,
+                maxInstances,
+                maxBones,
+                consolidate,
+                debugMode,
+                enabled,
+                metrics,
+                RenderSystem::isOnRenderThread,
+                () -> new Blaze3dModelPartBackend(maxInstances, maxBones, consolidate, metrics));
+    }
+
+    SelectingModelPartGpuBackend(
+            String requested,
+            int maxInstances,
+            int maxBones,
+            boolean consolidate,
+            DebugVisualMode debugMode,
+            boolean enabled,
+            ModelPartGpuMetrics metrics,
+            BooleanSupplier renderThreadCheck,
+            Supplier<ModelPartGpuBackend> backendFactory) {
         this.requested = requested;
         this.maxInstances = maxInstances;
         this.maxBones = maxBones;
         this.consolidate = consolidate;
         this.debugMode = debugMode;
         this.metrics = metrics;
+        this.renderThreadCheck = renderThreadCheck;
+        this.backendFactory = backendFactory;
         states =
                 new BackendStateMachine(enabled ? ModelPartBackendState.UNINITIALIZED : ModelPartBackendState.DISABLED);
     }
@@ -49,18 +78,30 @@ public final class SelectingModelPartGpuBackend implements ModelPartGpuBackend {
     }
 
     @Override
-    public synchronized boolean ensureReady() {
-        if (state().accepts()) return delegate.ensureReady();
+    public boolean ensureReady() {
+        ModelPartBackendState currentState = state();
+        if (currentState == ModelPartBackendState.READY || currentState == ModelPartBackendState.ACTIVE) {
+            ModelPartGpuBackend currentDelegate = delegate;
+            return currentDelegate != null && currentDelegate.ensureReady();
+        }
+        return ensureReadySlow();
+    }
+
+    private synchronized boolean ensureReadySlow() {
+        if (state().accepts()) {
+            ModelPartGpuBackend currentDelegate = delegate;
+            return currentDelegate != null && currentDelegate.ensureReady();
+        }
         if (state() != ModelPartBackendState.UNINITIALIZED
                 || attemptGuard.attempted()
-                || !RenderSystem.isOnRenderThread()) return false;
+                || !renderThreadCheck.getAsBoolean()) return false;
         if (!attemptGuard.beginAttempt()) return false;
         metrics.initializationAttempts.increment();
         states.transition(ModelPartBackendState.UNINITIALIZED, ModelPartBackendState.INITIALIZING);
         ThreadiumClient.LOGGER.info("GPU ModelPart backend INITIALIZING");
         selected = "Blaze3D";
         ThreadiumClient.LOGGER.info("GPU ModelPart backend selected: {}", selected);
-        delegate = new Blaze3dModelPartBackend(maxInstances, maxBones, consolidate, metrics);
+        delegate = backendFactory.get();
         delegate.invalidatePipelines(generation);
         if (!delegate.ensureReady()) {
             fail("backend resource or shader initialization failed");
@@ -110,9 +151,15 @@ public final class SelectingModelPartGpuBackend implements ModelPartGpuBackend {
             int tint,
             ModelPartUvTransform uvTransform,
             ModelPartDecalTransform decalTransform) {
-        boolean accepted = state().accepts()
+        long selectorStart = PROFILE_QUEUE ? System.nanoTime() : 0L;
+        boolean ready = state().accepts();
+        long selectorNanos = PROFILE_QUEUE ? System.nanoTime() - selectorStart : 0L;
+        boolean accepted = ready
                 && delegate.queue(mesh, renderType, rootPose, bones, light, overlay, tint, uvTransform, decalTransform);
-        if (accepted) queuedCount++;
+        if (accepted) {
+            queuedCount++;
+            if (PROFILE_QUEUE) metrics.backendQueueSelectorNanos.add(selectorNanos);
+        }
         return accepted;
     }
 

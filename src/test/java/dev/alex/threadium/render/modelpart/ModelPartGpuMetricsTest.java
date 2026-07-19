@@ -20,4 +20,32 @@ class ModelPartGpuMetricsTest {
         assertEquals(45, metrics.interceptMaterialCaptureNanos.sum());
         assertEquals(15, metrics.interceptBackendQueueNanos.sum());
     }
+
+    @Test
+    void backendQueueTimingsAccumulateAndSnapshotResetTogether() {
+        ModelPartGpuMetrics metrics = new ModelPartGpuMetrics();
+        metrics.recordBackendQueueTiming(10, 20, 30, 40, 50);
+        metrics.backendQueuePrepareCalls.add(1);
+        metrics.backendQueuePrepareReuseHits.add(7);
+        metrics.backendQueueSelectorNanos.add(5);
+        metrics.recordBackendQueueTiming(1, 2, 3, 4, 5);
+        metrics.backendQueuePrepareCalls.add(2);
+        metrics.backendQueuePrepareReuseHits.add(8);
+        metrics.backendQueueSelectorNanos.add(6);
+
+        ModelPartRenderService.BackendQueueTimings snapshot =
+                ModelPartRenderService.snapshotBackendQueueTimings(metrics);
+        assertEquals(2, snapshot.count());
+        assertEquals(3, snapshot.prepareCalls());
+        assertEquals(15, snapshot.prepareReuseHits());
+        assertEquals(11, snapshot.selectorNanos());
+        assertEquals(11, snapshot.precheckNanos());
+        assertEquals(22, snapshot.prepareNanos());
+        assertEquals(33, snapshot.preparedValidationNanos());
+        assertEquals(44, snapshot.instanceCaptureNanos());
+        assertEquals(55, snapshot.insertionAndPaletteNanos());
+        assertEquals(
+                ModelPartRenderService.BackendQueueTimings.zero(),
+                ModelPartRenderService.snapshotBackendQueueTimings(metrics));
+    }
 }

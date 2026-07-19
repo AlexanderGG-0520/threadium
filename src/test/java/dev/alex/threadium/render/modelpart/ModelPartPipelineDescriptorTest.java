@@ -2,6 +2,8 @@ package dev.alex.threadium.render.modelpart;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.resources.Identifier;
@@ -14,6 +16,10 @@ class ModelPartPipelineDescriptorTest {
     @Test
     void everyAuditedVanillaPipelineMapsExactlyOnce() {
         assertEquals(20, ModelPartPipelineDescriptor.values().length);
+        assertEquals(ModelPartPipelineDescriptor.values().length, ModelPartPipelineDescriptor.SOURCES.size());
+        var identities = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (var descriptor : ModelPartPipelineDescriptor.values())
+            assertTrue(identities.add(descriptor.source()), descriptor.name());
         for (var descriptor : ModelPartPipelineDescriptor.values())
             assertSame(descriptor, ModelPartPipelineDescriptor.from(descriptor.source()));
     }
@@ -80,6 +86,26 @@ class ModelPartPipelineDescriptorTest {
         assertEquals(
                 ModelPartPipelineDescriptor.Ordering.ORDERED_ADJACENT,
                 ModelPartPipelineDescriptor.CRUMBLING.ordering());
+    }
+
+    @Test
+    void preparedReusePolicyIsConservativeAndIndependentFromSubmissionPolicy() {
+        assertTrue(ModelPartPipelineDescriptor.ENTITY_SOLID.allowsGroupLocalPreparedReuse());
+        assertTrue(ModelPartPipelineDescriptor.ENTITY_CUTOUT_CULL.allowsGroupLocalPreparedReuse());
+        assertTrue(ModelPartPipelineDescriptor.ENTITY_CUTOUT.allowsGroupLocalPreparedReuse());
+        for (var descriptor : ModelPartPipelineDescriptor.values()) {
+            boolean expected = descriptor == ModelPartPipelineDescriptor.ENTITY_SOLID
+                    || descriptor == ModelPartPipelineDescriptor.ENTITY_CUTOUT_CULL
+                    || descriptor == ModelPartPipelineDescriptor.ENTITY_CUTOUT;
+            assertEquals(expected, descriptor.allowsGroupLocalPreparedReuse(), descriptor.name());
+        }
+        assertFalse(ModelPartPipelineDescriptor.ENTITY_CUTOUT_Z_OFFSET.allowsGroupLocalPreparedReuse());
+        assertFalse(ModelPartPipelineDescriptor.ENTITY_CUTOUT_DISSOLVE.allowsGroupLocalPreparedReuse());
+        assertFalse(ModelPartPipelineDescriptor.ENTITY_TRANSLUCENT.allowsGroupLocalPreparedReuse());
+        assertFalse(ModelPartPipelineDescriptor.ENERGY_SWIRL.allowsGroupLocalPreparedReuse());
+        assertFalse(ModelPartPipelineDescriptor.GLINT.allowsGroupLocalPreparedReuse());
+        assertFalse(ModelPartPipelineDescriptor.CRUMBLING.allowsGroupLocalPreparedReuse());
+        assertFalse(ModelPartPipelineDescriptor.OUTLINE_CULL.allowsGroupLocalPreparedReuse());
     }
 
     @Test

@@ -559,6 +559,38 @@ public final class ModelPartRenderService {
                 metrics.interceptBackendQueueNanos.sumThenReset());
     }
 
+    public BackendQueueTimings benchmarkBackendQueueTimingsSnapshotAndReset() {
+        return snapshotBackendQueueTimings(metrics);
+    }
+
+    static BackendQueueTimings snapshotBackendQueueTimings(ModelPartGpuMetrics metrics) {
+        return new BackendQueueTimings(
+                metrics.backendQueueProfileCount.sumThenReset(),
+                metrics.backendQueuePrepareCalls.sumThenReset(),
+                metrics.backendQueuePrepareReuseHits.sumThenReset(),
+                metrics.backendQueueSelectorNanos.sumThenReset(),
+                metrics.backendQueuePrecheckNanos.sumThenReset(),
+                metrics.backendQueuePrepareNanos.sumThenReset(),
+                metrics.backendQueuePreparedValidationNanos.sumThenReset(),
+                metrics.backendQueueInstanceCaptureNanos.sumThenReset(),
+                metrics.backendQueueInsertionAndPaletteNanos.sumThenReset());
+    }
+
+    public record BackendQueueTimings(
+            long count,
+            long prepareCalls,
+            long prepareReuseHits,
+            long selectorNanos,
+            long precheckNanos,
+            long prepareNanos,
+            long preparedValidationNanos,
+            long instanceCaptureNanos,
+            long insertionAndPaletteNanos) {
+        public static BackendQueueTimings zero() {
+            return new BackendQueueTimings(0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+    }
+
     public record InterceptTimings(
             long count,
             long interceptTotalNanos,

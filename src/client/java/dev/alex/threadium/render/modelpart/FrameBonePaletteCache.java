@@ -24,36 +24,48 @@ final class FrameBonePaletteCache {
     private GenericModelPartTopology capturedTopology;
     private int capturedLength;
     private boolean lastLookupPerformed;
+    private boolean lastLookupUsedRecent;
     private boolean capturedForStore;
 
     ModelPartBoneData find(GenericModelPartTopology topology) {
         ReuseProbe probe = probe(topology);
         if (probe.bypass) return bypassLookup();
-        capture(topology);
+        lastLookupUsedRecent = false;
+        if (capture(topology, probe.recentEntry)) return recentHit(probe);
         return finishLookup(probe, capturedHash);
     }
 
     ModelPartBoneData findWithHashForTest(GenericModelPartTopology topology, long hash) {
         ReuseProbe probe = probe(topology);
         if (probe.bypass) return bypassLookup();
-        capture(topology);
+        lastLookupUsedRecent = false;
+        if (capture(topology, probe.recentEntry)) return recentHit(probe);
         capturedHash = hash;
         return finishLookup(probe, hash);
     }
 
     private ModelPartBoneData bypassLookup() {
         lastLookupPerformed = false;
+        lastLookupUsedRecent = false;
         capturedForStore = false;
         return null;
     }
 
+    private ModelPartBoneData recentHit(ReuseProbe probe) {
+        lastLookupPerformed = true;
+        lastLookupUsedRecent = true;
+        capturedForStore = false;
+        return palettes[probe.recentEntry];
+    }
+
     private ModelPartBoneData finishLookup(ReuseProbe probe, long hash) {
         lastLookupPerformed = true;
-        ModelPartBoneData found = findCaptured(hash);
-        if (found != null) {
+        int found = findCaptured(hash);
+        if (found >= 0) {
             probe.reuseConfirmed = true;
+            probe.recentEntry = found;
             capturedForStore = false;
-            return found;
+            return palettes[found];
         }
         probe.misses++;
         // A confirmed hit keeps exact dedup active. Otherwise bound unique-pose probing per frame.
@@ -64,6 +76,10 @@ final class FrameBonePaletteCache {
 
     boolean lastLookupPerformed() {
         return lastLookupPerformed;
+    }
+
+    boolean lastLookupUsedRecent() {
+        return lastLookupUsedRecent;
     }
 
     boolean store(ModelPartBoneData palette) {
@@ -91,6 +107,7 @@ final class FrameBonePaletteCache {
         entries = 0;
         storedCount = 0;
         lastLookupPerformed = false;
+        lastLookupUsedRecent = false;
         capturedForStore = false;
         for (ReuseProbe probe : reuseProbes.values()) probe.beginFrame();
     }
@@ -121,13 +138,20 @@ final class FrameBonePaletteCache {
         return probe;
     }
 
-    private void capture(GenericModelPartTopology topology) {
+    private boolean capture(GenericModelPartTopology topology, int recentEntry) {
         int length = Math.multiplyExact(topology.nodes().size(), 11);
         if (scratch.length < length) scratch = Arrays.copyOf(scratch, grow(scratch.length, length));
         long hash = 0xcbf29ce484222325L ^ System.identityHashCode(topology);
+        boolean compareRecent = recentEntry >= 0
+                && recentEntry < entries
+                && topologies[recentEntry] == topology
+                && lengths[recentEntry] == length;
+        int recentOffset = compareRecent ? offsets[recentEntry] : 0;
+        int mismatch = 0;
         int at = 0;
         for (GenericModelPartTopology.Node node : topology.nodes()) {
             var part = node.part();
+            int nodeStart = at;
             scratch[at++] = Float.floatToRawIntBits(part.x);
             scratch[at++] = Float.floatToRawIntBits(part.y);
             scratch[at++] = Float.floatToRawIntBits(part.z);
@@ -139,14 +163,23 @@ final class FrameBonePaletteCache {
             scratch[at++] = Float.floatToRawIntBits(part.zScale);
             scratch[at++] = part.visible ? 1 : 0;
             scratch[at++] = part.skipDraw ? 1 : 0;
+            if (compareRecent) {
+                for (int i = nodeStart; i < at; i++) mismatch |= storedBits[recentOffset + i] ^ scratch[i];
+            } else {
+                for (int i = nodeStart; i < at; i++)
+                    hash = (hash ^ Integer.toUnsignedLong(scratch[i])) * 0x100000001b3L;
+            }
         }
-        for (int i = 0; i < length; i++) hash = (hash ^ Integer.toUnsignedLong(scratch[i])) * 0x100000001b3L;
+        if (compareRecent && mismatch != 0) {
+            for (int i = 0; i < length; i++) hash = (hash ^ Integer.toUnsignedLong(scratch[i])) * 0x100000001b3L;
+        }
         capturedHash = hash;
         capturedTopology = topology;
         capturedLength = length;
+        return compareRecent && mismatch == 0;
     }
 
-    private ModelPartBoneData findCaptured(long hash) {
+    private int findCaptured(long hash) {
         int mask = table.length - 1;
         int slot = mix(hash) & mask;
         while (table[slot] != 0) {
@@ -154,10 +187,10 @@ final class FrameBonePaletteCache {
             if (hashes[entry] == hash
                     && topologies[entry] == capturedTopology
                     && lengths[entry] == capturedLength
-                    && exact(entry)) return palettes[entry];
+                    && exact(entry)) return entry;
             slot = (slot + 1) & mask;
         }
-        return null;
+        return -1;
     }
 
     private boolean exact(int entry) {
@@ -207,11 +240,13 @@ final class FrameBonePaletteCache {
 
     private static final class ReuseProbe {
         private int misses;
+        private int recentEntry = -1;
         private boolean reuseConfirmed;
         private boolean bypass;
 
         private void beginFrame() {
             misses = 0;
+            recentEntry = -1;
             reuseConfirmed = false;
             bypass = false;
         }

@@ -9,6 +9,30 @@ import org.junit.jupiter.api.Test;
 
 class BenchmarkCoreTest {
     @Test
+    void benchmarkJsonIncludesQueueProfilingBreakdown() {
+        String fields = ThreadiumBenchmark.backendQueueTimingFields(
+                new dev.alex.threadium.render.modelpart.ModelPartRenderService.BackendQueueTimings(
+                        2, 1, 1, 10, 20, 30, 40, 50, 60),
+                4);
+
+        for (String name : List.of(
+                "backendQueueProfileCount",
+                "backendQueuePrepareCalls",
+                "backendQueuePrepareReuseHits",
+                "backendQueuePrepareCallsPerFrame",
+                "backendQueuePrepareReuseHitsPerFrame",
+                "backendQueuePrepareReuseRatio",
+                "backendQueueSelectorNanos",
+                "backendQueuePrecheckNanos",
+                "backendQueuePrepareNanos",
+                "backendQueuePreparedValidationNanos",
+                "backendQueueInstanceCaptureNanos",
+                "backendQueueInsertionAndPaletteNanos",
+                "backendQueuePrecheckNanosPerFrame",
+                "backendQueuePrepareNanosPerInstance")) assertTrue(fields.contains('"' + name + '"'));
+    }
+
+    @Test
     void modeParsingAndPolicyAreUnambiguous() {
         assertTrue(ModelPartBenchmarkMode.parseOptional(null).isEmpty());
         assertEquals(

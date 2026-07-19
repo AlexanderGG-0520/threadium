@@ -19,9 +19,29 @@ class FrameBonePaletteCacheTest {
     }
 
     @Test
-    void translationRotationScaleAndVisibilityDifferencesMiss() {
+    void repeatedExactHitUsesRecentEntryOnlyAfterGeneralReuseConfirmation() {
+        Fixture fixture = fixture();
+        ModelPartBoneData palette = palette(1);
+
+        assertNull(fixture.cache.find(fixture.topology));
+        assertTrue(fixture.cache.store(palette));
+        assertSame(palette, fixture.cache.find(fixture.topology));
+        assertFalse(fixture.cache.lastLookupUsedRecent());
+        assertSame(palette, fixture.cache.find(fixture.topology));
+        assertTrue(fixture.cache.lastLookupUsedRecent());
+        assertEquals(1, fixture.cache.size());
+    }
+
+    @Test
+    void everyCapturedPoseFieldInvalidatesRecentEntry() {
         assertPoseChangeMiss(part -> part.x = 1);
+        assertPoseChangeMiss(part -> part.y = 1);
+        assertPoseChangeMiss(part -> part.z = 1);
+        assertPoseChangeMiss(part -> part.xRot = 0.25f);
         assertPoseChangeMiss(part -> part.yRot = 0.25f);
+        assertPoseChangeMiss(part -> part.zRot = 0.25f);
+        assertPoseChangeMiss(part -> part.xScale = 2);
+        assertPoseChangeMiss(part -> part.yScale = 2);
         assertPoseChangeMiss(part -> part.zScale = 2);
         assertPoseChangeMiss(part -> part.visible = false);
         assertPoseChangeMiss(part -> part.skipDraw = true);
@@ -40,9 +60,40 @@ class FrameBonePaletteCacheTest {
     void hashCollisionStillRequiresExactComparison() {
         Fixture fixture = fixture();
         assertNull(fixture.cache.findWithHashForTest(fixture.topology, 7));
-        fixture.cache.store(palette(1));
+        ModelPartBoneData first = palette(1);
+        fixture.cache.store(first);
+        assertSame(first, fixture.cache.findWithHashForTest(fixture.topology, 7));
         fixture.part.x = 3;
         assertNull(fixture.cache.findWithHashForTest(fixture.topology, 7));
+        assertFalse(fixture.cache.lastLookupUsedRecent());
+    }
+
+    @Test
+    void alternatingReusablePosesUpdateRecentEntryAfterGeneralHits() {
+        Fixture fixture = fixture();
+        ModelPartBoneData first = palette(1);
+        ModelPartBoneData second = palette(2);
+
+        assertNull(fixture.cache.find(fixture.topology));
+        assertTrue(fixture.cache.store(first));
+        fixture.part.x = 2;
+        assertNull(fixture.cache.find(fixture.topology));
+        assertTrue(fixture.cache.store(second));
+
+        fixture.part.x = 0;
+        assertSame(first, fixture.cache.find(fixture.topology));
+        assertFalse(fixture.cache.lastLookupUsedRecent());
+        fixture.part.x = 2;
+        assertSame(second, fixture.cache.find(fixture.topology));
+        assertFalse(fixture.cache.lastLookupUsedRecent());
+        assertSame(second, fixture.cache.find(fixture.topology));
+        assertTrue(fixture.cache.lastLookupUsedRecent());
+        fixture.part.x = 0;
+        assertSame(first, fixture.cache.find(fixture.topology));
+        assertFalse(fixture.cache.lastLookupUsedRecent());
+        assertSame(first, fixture.cache.find(fixture.topology));
+        assertTrue(fixture.cache.lastLookupUsedRecent());
+        assertEquals(2, fixture.cache.size());
     }
 
     @Test
@@ -122,10 +173,62 @@ class FrameBonePaletteCacheTest {
     void frameBoundaryDropsPaletteReferences() {
         Fixture fixture = fixture();
         fixture.cache.find(fixture.topology);
-        fixture.cache.store(palette(1));
+        ModelPartBoneData first = palette(1);
+        fixture.cache.store(first);
+        assertSame(first, fixture.cache.find(fixture.topology));
+        assertSame(first, fixture.cache.find(fixture.topology));
+        assertTrue(fixture.cache.lastLookupUsedRecent());
         fixture.cache.beginFrame();
         assertEquals(0, fixture.cache.size());
         assertNull(fixture.cache.find(fixture.topology));
+        assertFalse(fixture.cache.lastLookupUsedRecent());
+        ModelPartBoneData second = palette(2);
+        assertTrue(fixture.cache.store(second));
+        assertSame(second, fixture.cache.find(fixture.topology));
+        assertFalse(fixture.cache.lastLookupUsedRecent());
+        assertSame(second, fixture.cache.find(fixture.topology));
+        assertTrue(fixture.cache.lastLookupUsedRecent());
+    }
+
+    @Test
+    void recentEntriesRemainScopedToTheirExactTopology() {
+        Fixture first = fixture();
+        Fixture second = fixture();
+        ModelPartBoneData firstPalette = palette(1);
+        ModelPartBoneData secondPalette = palette(2);
+
+        assertNull(first.cache.find(first.topology));
+        assertTrue(first.cache.store(firstPalette));
+        assertSame(firstPalette, first.cache.find(first.topology));
+        assertSame(firstPalette, first.cache.find(first.topology));
+        assertTrue(first.cache.lastLookupUsedRecent());
+
+        assertNull(first.cache.find(second.topology));
+        assertTrue(first.cache.store(secondPalette));
+        assertSame(secondPalette, first.cache.find(second.topology));
+        assertFalse(first.cache.lastLookupUsedRecent());
+        assertSame(secondPalette, first.cache.find(second.topology));
+        assertTrue(first.cache.lastLookupUsedRecent());
+
+        assertSame(firstPalette, first.cache.find(first.topology));
+        assertTrue(first.cache.lastLookupUsedRecent());
+    }
+
+    @Test
+    void clearDropsRecentEntriesAndPaletteReferences() {
+        Fixture fixture = fixture();
+        ModelPartBoneData first = palette(1);
+        assertNull(fixture.cache.find(fixture.topology));
+        assertTrue(fixture.cache.store(first));
+        assertSame(first, fixture.cache.find(fixture.topology));
+        assertSame(first, fixture.cache.find(fixture.topology));
+        assertTrue(fixture.cache.lastLookupUsedRecent());
+
+        fixture.cache.clear();
+
+        assertEquals(0, fixture.cache.size());
+        assertNull(fixture.cache.find(fixture.topology));
+        assertFalse(fixture.cache.lastLookupUsedRecent());
     }
 
     @Test
@@ -143,9 +246,14 @@ class FrameBonePaletteCacheTest {
     private static void assertPoseChangeMiss(java.util.function.Consumer<ModelPart> change) {
         Fixture fixture = fixture();
         fixture.cache.find(fixture.topology);
-        fixture.cache.store(palette(1));
+        ModelPartBoneData palette = palette(1);
+        fixture.cache.store(palette);
+        assertSame(palette, fixture.cache.find(fixture.topology));
+        assertSame(palette, fixture.cache.find(fixture.topology));
+        assertTrue(fixture.cache.lastLookupUsedRecent());
         change.accept(fixture.part);
         assertNull(fixture.cache.find(fixture.topology));
+        assertFalse(fixture.cache.lastLookupUsedRecent());
     }
 
     private static Fixture fixture() {

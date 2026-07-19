@@ -503,6 +503,9 @@ public final class ThreadiumBenchmark {
         var interceptTimings = service == null
                 ? ModelPartRenderService.InterceptTimings.zero()
                 : service.benchmarkInterceptTimingsSnapshotAndReset();
+        var backendQueueTimings = service == null
+                ? ModelPartRenderService.BackendQueueTimings.zero()
+                : service.benchmarkBackendQueueTimingsSnapshotAndReset();
         var diagnostics = service == null
                 ? BoundedFallbackDiagnostics.Snapshot.empty()
                 : service.benchmarkFallbackDiagnosticsAndReset();
@@ -560,6 +563,7 @@ public final class ThreadiumBenchmark {
                 model,
                 flushTimings,
                 interceptTimings,
+                backendQueueTimings,
                 diagnostics,
                 finalStatus,
                 List.copyOf(reasons));
@@ -582,6 +586,7 @@ public final class ThreadiumBenchmark {
             service.benchmarkSnapshotAndReset();
             service.benchmarkFlushTimingsSnapshotAndReset();
             service.benchmarkInterceptTimingsSnapshotAndReset();
+            service.benchmarkBackendQueueTimingsSnapshotAndReset();
             service.benchmarkFallbackDiagnosticsAndReset();
         }
     }
@@ -735,6 +740,7 @@ public final class ThreadiumBenchmark {
             ModelPartRenderService.BenchmarkMetrics model,
             ModelPartRenderService.Blaze3dFlushTimings flushTimings,
             ModelPartRenderService.InterceptTimings interceptTimings,
+            ModelPartRenderService.BackendQueueTimings backendQueueTimings,
             BoundedFallbackDiagnostics.Snapshot diagnostics,
             String status,
             List<String> reasons)
@@ -881,6 +887,7 @@ public final class ThreadiumBenchmark {
                         interceptTimings.count(),
                         interceptTimings.backendQueueNanos(),
                         stats.sampleCount())
+                + backendQueueTimingFields(backendQueueTimings, stats.sampleCount())
                 + field("backendFailures", model.backendFailures())
                 + field("blaze3dSubmissionFailures", model.blaze3dSubmissionFailures())
                 + field("rawProductionDrawCalls", model.rawProductionDrawCalls())
@@ -927,6 +934,45 @@ public final class ThreadiumBenchmark {
 
     private static String instanceTimingFields(String name, long count, long totalNanos, long frameCount) {
         return timingFields(name, count, totalNanos, frameCount)
+                + field(name + "NanosPerInstance", count == 0 ? 0d : (double) totalNanos / count);
+    }
+
+    static String backendQueueTimingFields(ModelPartRenderService.BackendQueueTimings timings, long frameCount) {
+        return field("backendQueueProfileCount", timings.count())
+                + field("backendQueuePrepareCalls", timings.prepareCalls())
+                + field("backendQueuePrepareReuseHits", timings.prepareReuseHits())
+                + field(
+                        "backendQueuePrepareCallsPerFrame",
+                        frameCount == 0 ? 0d : (double) timings.prepareCalls() / frameCount)
+                + field(
+                        "backendQueuePrepareReuseHitsPerFrame",
+                        frameCount == 0 ? 0d : (double) timings.prepareReuseHits() / frameCount)
+                + field(
+                        "backendQueuePrepareReuseRatio",
+                        timings.prepareCalls() + timings.prepareReuseHits() == 0
+                                ? 0d
+                                : (double) timings.prepareReuseHits()
+                                        / (timings.prepareCalls() + timings.prepareReuseHits()))
+                + queueSubTimingFields("backendQueueSelector", timings.selectorNanos(), timings.count(), frameCount)
+                + queueSubTimingFields("backendQueuePrecheck", timings.precheckNanos(), timings.count(), frameCount)
+                + queueSubTimingFields("backendQueuePrepare", timings.prepareNanos(), timings.count(), frameCount)
+                + queueSubTimingFields(
+                        "backendQueuePreparedValidation",
+                        timings.preparedValidationNanos(),
+                        timings.count(),
+                        frameCount)
+                + queueSubTimingFields(
+                        "backendQueueInstanceCapture", timings.instanceCaptureNanos(), timings.count(), frameCount)
+                + queueSubTimingFields(
+                        "backendQueueInsertionAndPalette",
+                        timings.insertionAndPaletteNanos(),
+                        timings.count(),
+                        frameCount);
+    }
+
+    private static String queueSubTimingFields(String name, long totalNanos, long count, long frameCount) {
+        return field(name + "Nanos", totalNanos)
+                + field(name + "NanosPerFrame", frameCount == 0 ? 0d : (double) totalNanos / frameCount)
                 + field(name + "NanosPerInstance", count == 0 ? 0d : (double) totalNanos / count);
     }
 
