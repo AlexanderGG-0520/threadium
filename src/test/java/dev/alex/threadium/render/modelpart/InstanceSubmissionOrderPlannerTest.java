@@ -8,6 +8,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.rendertype.RenderSetup;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import org.junit.jupiter.api.Test;
 
 class InstanceSubmissionOrderPlannerTest {
@@ -90,6 +93,31 @@ class InstanceSubmissionOrderPlannerTest {
 
         assertEquals(1, plan.batchCount());
         assertArrayEquals(new int[] {2}, counts(plan));
+    }
+
+    @Test
+    void sharedAndDistinctEqualModelPartKeysProduceEquivalentPlans() {
+        RenderType type = RenderType.create(
+                "planner-equivalence",
+                RenderSetup.builder(RenderPipelines.ENTITY_CUTOUT).createRenderSetup());
+        var mesh = new ModelPartGpuBackend.MeshHandle(1, 2, 3, 6, 1, 1);
+        ModelPartBatchKey shared = new ModelPartBatchKey(mesh, type, 2, 3);
+        ModelPartBatchKey[] sharedKeys = {shared, shared, shared, shared};
+        ModelPartBatchKey[] distinctKeys = {
+            new ModelPartBatchKey(mesh, type, 2, 3),
+            new ModelPartBatchKey(mesh, type, 2, 3),
+            new ModelPartBatchKey(mesh, type, 2, 3),
+            new ModelPartBatchKey(mesh, type, 2, 3)
+        };
+        var distinctPlan = new InstanceSubmissionOrderPlanner().plan(indices(4), 4, distinctKeys, 4, 7, true, true);
+        var sharedPlan = new InstanceSubmissionOrderPlanner().plan(indices(4), 4, sharedKeys, 4, 7, true, true);
+
+        assertArrayEquals(packed(distinctPlan), packed(sharedPlan));
+        assertArrayEquals(representatives(distinctPlan), representatives(sharedPlan));
+        assertArrayEquals(firstPacked(distinctPlan), firstPacked(sharedPlan));
+        assertArrayEquals(counts(distinctPlan), counts(sharedPlan));
+        assertEquals(distinctPlan.instanceCount(), sharedPlan.instanceCount());
+        assertEquals(distinctPlan.batchCount(), sharedPlan.batchCount());
     }
 
     @Test

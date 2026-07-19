@@ -8,6 +8,7 @@ public final class ModelPartBatchKey {
     private final RenderType type;
     private final Object pipeline, outputTarget, format, topology;
     private final long epoch, group;
+    private final int hash;
 
     public ModelPartBatchKey(ModelPartGpuBackend.MeshHandle mesh, RenderType type, long epoch, long group) {
         this.mesh = mesh;
@@ -18,6 +19,34 @@ public final class ModelPartBatchKey {
         topology = type.primitiveTopology();
         this.epoch = epoch;
         this.group = group;
+        int computedHash = mesh.hashCode();
+        computedHash = 31 * computedHash + System.identityHashCode(type);
+        computedHash = 31 * computedHash + System.identityHashCode(pipeline);
+        computedHash = 31 * computedHash + System.identityHashCode(outputTarget);
+        computedHash = 31 * computedHash + System.identityHashCode(format);
+        computedHash = 31 * computedHash + System.identityHashCode(topology);
+        computedHash = 31 * computedHash + Long.hashCode(epoch);
+        hash = 31 * computedHash + Long.hashCode(group);
+    }
+
+    /**
+     * Tests whether constructing a key from these inputs would produce an equal key. An exact RenderType identity owns
+     * the immutable pipeline, output target, format, and topology captured by this key, so those identities need not be
+     * fetched again for a consecutive candidate of that same type.
+     */
+    boolean matches(
+            ModelPartGpuBackend.MeshHandle candidateMesh,
+            RenderType candidateType,
+            long candidateEpoch,
+            long candidateGroup) {
+        return mesh.equals(candidateMesh)
+                && type == candidateType
+                && epoch == candidateEpoch
+                && group == candidateGroup;
+    }
+
+    boolean referencesMesh(ModelPartGpuBackend.MeshHandle candidateMesh) {
+        return mesh.equals(candidateMesh);
     }
 
     @Override
@@ -36,13 +65,6 @@ public final class ModelPartBatchKey {
 
     @Override
     public int hashCode() {
-        int h = mesh.hashCode();
-        h = 31 * h + System.identityHashCode(type);
-        h = 31 * h + System.identityHashCode(pipeline);
-        h = 31 * h + System.identityHashCode(outputTarget);
-        h = 31 * h + System.identityHashCode(format);
-        h = 31 * h + System.identityHashCode(topology);
-        h = 31 * h + Long.hashCode(epoch);
-        return 31 * h + Long.hashCode(group);
+        return hash;
     }
 }

@@ -68,6 +68,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
     private final IdentityHashMap<RenderPipeline, RenderPipeline> pipelines = new IdentityHashMap<>();
     private final PipelineValidityTable<RenderPipeline> validity = new PipelineValidityTable<>();
     private final GroupLocalPreparedRenderTypeCache recentPrepared = new GroupLocalPreparedRenderTypeCache();
+    private final RecentModelPartBatchKeyCache recentBatchKey = new RecentModelPartBatchKeyCache();
     private final IdentityHashMap<ModelPartBoneData, Integer> framePaletteOffsets = new IdentityHashMap<>();
     private final IdentityHashMap<ModelPartBoneData, Boolean> uploadedFramePalettes = new IdentityHashMap<>();
     private final ArrayList<PlannedDraw> plannedDraws = new ArrayList<>();
@@ -293,6 +294,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
     @Override
     public void invalidatePipelines(long nextGeneration) {
         recentPrepared.clear();
+        recentBatchKey.clear();
         validity.markStale(nextGeneration);
         generation = nextGeneration;
         pipelinesNeedCompilation = true;
@@ -390,7 +392,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
         }
         long instanceCaptureStart = queueProfileNow();
         int decalBase = decalTransform == null ? -1 : frameDecalCount++;
-        ModelPartBatchKey key = new ModelPartBatchKey(mesh, type, epoch, groupId);
+        ModelPartBatchKey key = recentBatchKey.getOrCreate(mesh, type, epoch, groupId);
         Matrix4f pose = new Matrix4f(rootPose);
         Queued entry = new Queued(
                 key, mesh, type, prepared, pose, bones, light, overlay, tint, uvTransform, decalTransform, decalBase);
@@ -419,9 +421,14 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
         return prepared.pipeline() == source;
     }
 
+    RecentModelPartBatchKeyCache recentBatchKeyForTesting() {
+        return recentBatchKey;
+    }
+
     @Override
     public void beginFrame() {
         recentPrepared.clear();
+        recentBatchKey.clear();
         if (!queued.isEmpty()) {
             fail();
             return;
@@ -503,6 +510,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
     @Override
     public void beginGroup(boolean strictlyOrdered) {
         recentPrepared.clear();
+        recentBatchKey.clear();
         groupStart = queued.size();
         groupId++;
         groups.addLast(new Group(-1, strictlyOrdered));
@@ -513,6 +521,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
         Group pending = groups.removeLast();
         groups.addLast(new Group(queued.size() - groupStart, pending.strictlyOrdered));
         recentPrepared.clear();
+        recentBatchKey.clear();
     }
 
     @Override
@@ -1009,6 +1018,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
 
     @Override
     public void destroy(MeshHandle handle) {
+        recentBatchKey.clearIfReferences(handle);
         Mesh mesh = meshes.remove(handle);
         if (mesh != null) {
             mesh.vertices.close();
@@ -1019,6 +1029,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
     @Override
     public void clear() {
         recentPrepared.clear();
+        recentBatchKey.clear();
         queued.clear();
         groups.clear();
         clearPlanningScratch();
@@ -1045,6 +1056,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
 
     private void fail() {
         recentPrepared.clear();
+        recentBatchKey.clear();
         ModelPartBackendState state = state();
         if (state == ModelPartBackendState.INITIALIZING
                 || state == ModelPartBackendState.READY
