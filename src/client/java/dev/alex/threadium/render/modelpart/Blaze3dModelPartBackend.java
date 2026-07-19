@@ -340,11 +340,9 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
             ModelPartUvTransform uvTransform,
             ModelPartDecalTransform decalTransform) {
         long precheckStart = queueProfileNow();
-        if (!state().accepts()
-                || !(renderType instanceof RenderType type)
-                || !meshes.containsKey(mesh)
-                || queued.size() >= maxInstances) return false;
+        if (!state().accepts() || !(renderType instanceof RenderType type)) return false;
         recentPrepared.observe(type);
+        if (!meshes.containsKey(mesh) || queued.size() >= maxInstances) return false;
         int count = bones.matrices().length / 28;
         Integer existingBase = framePaletteOffsets.get(bones);
         if (existingBase == null && frameBoneCount + count > maxBones) return false;
@@ -361,10 +359,11 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
             return false;
         }
         long prepareStart = queueProfileNow();
-        PreparedRenderType prepared = descriptor.allowsGroupLocalPreparedReuse()
-                ? recentPrepared.reuse(type, descriptor, source, generation, groupId)
-                : null;
-        if (prepared != null) {
+        boolean reuseEligible = descriptor.allowsGroupLocalPreparedReuse();
+        PreparedRenderType prepared =
+                reuseEligible ? recentPrepared.reuse(type, descriptor, source, generation, groupId) : null;
+        boolean reusedPrepared = prepared != null;
+        if (reusedPrepared) {
             metrics.backendQueuePrepareReuseHits.increment();
         } else {
             recentPrepared.clear();
@@ -377,15 +376,17 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
             }
         }
         long preparedValidationStart = queueProfileNow();
-        if (prepared.pipeline() != source) {
-            recentPrepared.clear();
-            unsupported(prepared.pipeline());
-            return false;
-        }
-        if (descriptor.allowsGroupLocalPreparedReuse()
-                && !recentPrepared.install(type, descriptor, source, prepared, generation, groupId)) {
-            unsupported(prepared.pipeline());
-            return false;
+        if (!reusedPrepared) {
+            if (reuseEligible) {
+                if (!recentPrepared.install(type, descriptor, source, prepared, generation, groupId)) {
+                    unsupported(prepared.pipeline());
+                    return false;
+                }
+            } else if (!preparedMatchesSource(prepared, source)) {
+                recentPrepared.clear();
+                unsupported(prepared.pipeline());
+                return false;
+            }
         }
         long instanceCaptureStart = queueProfileNow();
         int decalBase = decalTransform == null ? -1 : frameDecalCount++;
@@ -412,6 +413,10 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
 
     private static long queueProfileNow() {
         return PROFILE_QUEUE ? System.nanoTime() : 0L;
+    }
+
+    static boolean preparedMatchesSource(PreparedRenderType prepared, RenderPipeline source) {
+        return prepared.pipeline() == source;
     }
 
     @Override

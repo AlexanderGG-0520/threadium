@@ -16,12 +16,14 @@ class GroupLocalPreparedRenderTypeCacheTest {
         RenderType type = type("a");
         PreparedRenderType prepared = prepared(RenderPipelines.ENTITY_CUTOUT);
         int prepareCalls = 0;
+        int installCalls = 0;
         int reuseHits = 0;
         for (int i = 0; i < 3; i++) {
             PreparedRenderType found =
                     cache.reuse(type, ModelPartPipelineDescriptor.ENTITY_CUTOUT, type.pipeline(), 4, 7);
             if (found == null) {
                 prepareCalls++;
+                installCalls++;
                 assertTrue(cache.install(
                         type, ModelPartPipelineDescriptor.ENTITY_CUTOUT, type.pipeline(), prepared, 4, 7));
             } else {
@@ -30,6 +32,7 @@ class GroupLocalPreparedRenderTypeCacheTest {
             }
         }
         assertEquals(1, prepareCalls);
+        assertEquals(1, installCalls);
         assertEquals(2, reuseHits);
     }
 
@@ -56,6 +59,21 @@ class GroupLocalPreparedRenderTypeCacheTest {
                     1));
         }
         assertEquals(3, prepareCalls);
+    }
+
+    @Test
+    void rejectedDifferentIdentityStillBreaksConsecutiveReuse() {
+        var cache = new GroupLocalPreparedRenderTypeCache();
+        RenderType first = type("a");
+        RenderType rejected = type("b");
+        PreparedRenderType prepared = prepared(first.pipeline());
+        assertTrue(cache.install(first, ModelPartPipelineDescriptor.ENTITY_CUTOUT, first.pipeline(), prepared, 1, 1));
+
+        cache.observe(rejected); // The later queue precheck rejects B, so B is never installed.
+        cache.observe(first);
+
+        assertNull(cache.reuse(first, ModelPartPipelineDescriptor.ENTITY_CUTOUT, first.pipeline(), 1, 1));
+        assertFalse(cache.populated());
     }
 
     @Test
@@ -101,6 +119,14 @@ class GroupLocalPreparedRenderTypeCacheTest {
         }
         assertEquals(2, prepareCalls);
         assertFalse(cache.populated());
+    }
+
+    @Test
+    void ineligiblePreparedSourceValidationRemainsExactAndIdentityBased() {
+        PreparedRenderType valid = prepared(RenderPipelines.ENTITY_CUTOUT_DISSOLVE);
+        PreparedRenderType invalid = prepared(RenderPipelines.ENTITY_SOLID);
+        assertTrue(Blaze3dModelPartBackend.preparedMatchesSource(valid, RenderPipelines.ENTITY_CUTOUT_DISSOLVE));
+        assertFalse(Blaze3dModelPartBackend.preparedMatchesSource(invalid, RenderPipelines.ENTITY_CUTOUT_DISSOLVE));
     }
 
     private static RenderType type(String name) {
