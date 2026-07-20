@@ -23,6 +23,7 @@ repositories {
 
 loom {
     splitEnvironmentSourceSets()
+    accessWidenerPath = file('src/backport1211/client/resources/threadium.accesswidener')
     runs {
         client {
             runDir = 'run-1.21.1'

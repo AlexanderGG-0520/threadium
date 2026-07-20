@@ -1,0 +1,6 @@
+accessWidener v2 named
+
+# These types are made nameable only so exact read-only Mixin accessor descriptors can be remapped.
+# Their fields remain private and are not widened.
+accessible class net/minecraft/client/model/ModelPart$Quad
+accessible class net/minecraft/client/model/ModelPart$Vertex

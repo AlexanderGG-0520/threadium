@@ -4,7 +4,11 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "GameRendererMixin",
-    "ModelPartMixin"
+    "ModelPartMixin",
+    "accessor.ModelPartAccessor",
+    "accessor.ModelPartCuboidAccessor",
+    "accessor.ModelPartQuadAccessor",
+    "accessor.ModelPartVertexAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

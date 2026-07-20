@@ -17,13 +17,28 @@ abstract class ModelPartMixin {
                     "render(Lnet/minecraft/client/util/math/MatrixStack;Lnet/minecraft/client/render/VertexConsumer;III)V",
             at = @At("HEAD"),
             require = 1)
-    private void threadium$observeModelPartRender(
+    private void threadium$beginModelPartRender(
             MatrixStack matrices,
             VertexConsumer vertexConsumer,
             int light,
             int overlay,
             int color,
             CallbackInfo callbackInfo) {
-        PassThroughEntityRenderService.observeModelPartRender();
+        PassThroughEntityRenderService.beginModelPartRender((ModelPart) (Object) this);
+    }
+
+    @Inject(
+            method =
+                    "render(Lnet/minecraft/client/util/math/MatrixStack;Lnet/minecraft/client/render/VertexConsumer;III)V",
+            at = @At("RETURN"),
+            require = 1)
+    private void threadium$endModelPartRender(
+            MatrixStack matrices,
+            VertexConsumer vertexConsumer,
+            int light,
+            int overlay,
+            int color,
+            CallbackInfo callbackInfo) {
+        PassThroughEntityRenderService.endModelPartRender();
     }
 }
