@@ -2,6 +2,7 @@ package dev.alex.threadium;
 
 import dev.alex.threadium.render.entity.PassThroughEntityRenderService;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
 import net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener;
@@ -23,6 +24,7 @@ public final class ThreadiumClient implements ClientModInitializer {
                 (handler, sender, client) -> PassThroughEntityRenderService.invalidateWorld());
         ClientPlayConnectionEvents.DISCONNECT.register(
                 (handler, client) -> PassThroughEntityRenderService.invalidateWorld());
+        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> PassThroughEntityRenderService.shutdown());
         ResourceManagerHelper.get(ResourceType.CLIENT_RESOURCES)
                 .registerReloadListener(new BackportResourceReloadListener());
         LOGGER.info("Threadium 1.21.1 backport bootstrap initialized; rendering replacement is disabled");
