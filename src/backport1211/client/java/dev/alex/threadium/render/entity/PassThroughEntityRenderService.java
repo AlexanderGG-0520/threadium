@@ -1,13 +1,14 @@
 package dev.alex.threadium.render.entity;
 
 import dev.alex.threadium.ThreadiumClient;
+import dev.alex.threadium.render.modelpart.structure.ImmutableModelPartMesh;
+import dev.alex.threadium.render.modelpart.structure.ModelPartMeshCapacityException;
 import dev.alex.threadium.render.modelpart.structure.ModelPartStructureInspector;
-import dev.alex.threadium.render.modelpart.structure.ModelPartStructureSnapshot;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.model.ModelPart;
 
-/** M1 structural observer. It never acquires rendering ownership and cannot suppress Vanilla rendering. */
+/** M1 CPU-mesh observer. It never acquires rendering ownership and cannot suppress Vanilla rendering. */
 public final class PassThroughEntityRenderService {
     private static volatile PassThroughEntityRenderService instance;
 
@@ -19,13 +20,22 @@ public final class PassThroughEntityRenderService {
     private final AtomicLong structureCacheMisses = new AtomicLong();
     private final AtomicLong structureInspectionFailures = new AtomicLong();
     private final AtomicLong structureCapacityRejections = new AtomicLong();
-    private final AtomicLong uniqueStructures = new AtomicLong();
-    private final AtomicLong lastObservedPartCount = new AtomicLong();
-    private final AtomicLong lastObservedCuboidCount = new AtomicLong();
+    private final AtomicLong meshCaptureAttempts = new AtomicLong();
+    private final AtomicLong meshCapturesCompleted = new AtomicLong();
+    private final AtomicLong meshCaptureFailures = new AtomicLong();
+    private final AtomicLong meshCaptureCapacityRejections = new AtomicLong();
+    private final AtomicLong meshRootCacheHits = new AtomicLong();
+    private final AtomicLong meshRootCacheMisses = new AtomicLong();
+    private final AtomicLong uniqueMeshes = new AtomicLong();
+    private final AtomicLong lastCapturedPartCount = new AtomicLong();
+    private final AtomicLong lastCapturedQuadCount = new AtomicLong();
+    private final AtomicLong lastCapturedVertexCount = new AtomicLong();
+    private final AtomicLong lastCapturedIndexCount = new AtomicLong();
+    private final AtomicLong retainedMeshBytes = new AtomicLong();
     private final ModelPartStructureInspector structureInspector = new ModelPartStructureInspector();
     private int renderDepth;
-    private boolean structureLogged;
-    private boolean inspectionFailureLogged;
+    private boolean meshCaptureLogged;
+    private boolean meshCaptureFailureLogged;
     private volatile boolean enabled = true;
 
     private PassThroughEntityRenderService() {}
@@ -47,7 +57,7 @@ public final class PassThroughEntityRenderService {
                     "Threadium detected Minecraft 1.21.1 ModelPart rendering; Vanilla pass-through remains active");
         }
         if (current.renderDepth++ != 0) return;
-        current.inspectStructure(part);
+        current.captureStructure(part);
     }
 
     public static void endModelPartRender() {
@@ -81,7 +91,7 @@ public final class PassThroughEntityRenderService {
     public static Diagnostics diagnostics() {
         PassThroughEntityRenderService current = instance;
         return current == null
-                ? new Diagnostics(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+                ? Diagnostics.disabled()
                 : new Diagnostics(
                         current.enabled,
                         current.observedModelPartRenders.get(),
@@ -92,56 +102,85 @@ public final class PassThroughEntityRenderService {
                         current.structureCacheMisses.get(),
                         current.structureInspectionFailures.get(),
                         current.structureCapacityRejections.get(),
-                        current.uniqueStructures.get(),
-                        current.lastObservedPartCount.get(),
-                        current.lastObservedCuboidCount.get());
+                        current.meshCaptureAttempts.get(),
+                        current.meshCapturesCompleted.get(),
+                        current.meshCaptureFailures.get(),
+                        current.meshCaptureCapacityRejections.get(),
+                        current.meshRootCacheHits.get(),
+                        current.meshRootCacheMisses.get(),
+                        current.uniqueMeshes.get(),
+                        current.lastCapturedPartCount.get(),
+                        current.lastCapturedQuadCount.get(),
+                        current.lastCapturedVertexCount.get(),
+                        current.lastCapturedIndexCount.get(),
+                        current.retainedMeshBytes.get());
     }
 
-    private void inspectStructure(ModelPart root) {
+    private void captureStructure(ModelPart root) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || !client.isOnThread()) {
             structureInspectionFailures.incrementAndGet();
+            meshCaptureFailures.incrementAndGet();
             return;
         }
 
-        ModelPartStructureSnapshot snapshot = structureInspector.cached(root);
-        if (snapshot != null) {
+        ImmutableModelPartMesh mesh = structureInspector.cached(root);
+        if (mesh != null) {
             structureCacheHits.incrementAndGet();
-            recordSnapshot(snapshot);
+            meshRootCacheHits.incrementAndGet();
+            recordMesh(mesh);
             return;
         }
 
         structureCacheMisses.incrementAndGet();
-        if (!structureInspector.canInspectNewRoot()) {
+        meshRootCacheMisses.incrementAndGet();
+        if (!structureInspector.canCaptureNewRoot()) {
             structureCapacityRejections.incrementAndGet();
+            meshCaptureCapacityRejections.incrementAndGet();
             return;
         }
 
+        meshCaptureAttempts.incrementAndGet();
         try {
-            snapshot = structureInspector.inspectAndCache(root);
+            mesh = structureInspector.captureAndCache(root);
             structureInspections.incrementAndGet();
-            uniqueStructures.set(structureInspector.uniqueStructureCount());
-            recordSnapshot(snapshot);
+            meshCapturesCompleted.incrementAndGet();
+            uniqueMeshes.set(structureInspector.uniqueMeshCount());
+            retainedMeshBytes.set(structureInspector.retainedMeshBytes());
+            recordMesh(mesh);
+        } catch (ModelPartMeshCapacityException exception) {
+            structureCapacityRejections.incrementAndGet();
+            meshCaptureCapacityRejections.incrementAndGet();
+            warnCaptureFailureOnce("capacity limit reached", exception, false);
         } catch (RuntimeException exception) {
             structureInspectionFailures.incrementAndGet();
-            if (!inspectionFailureLogged) {
-                inspectionFailureLogged = true;
-                ThreadiumClient.LOGGER.warn(
-                        "Threadium could not inspect a Minecraft 1.21.1 ModelPart structure; Vanilla pass-through remains active",
-                        exception);
-            }
+            meshCaptureFailures.incrementAndGet();
+            warnCaptureFailureOnce("capture failed", exception, true);
         }
     }
 
-    private void recordSnapshot(ModelPartStructureSnapshot snapshot) {
-        lastObservedPartCount.set(snapshot.partCount());
-        lastObservedCuboidCount.set(snapshot.cuboidCount());
-        if (!structureLogged) {
-            structureLogged = true;
+    private void warnCaptureFailureOnce(String reason, RuntimeException exception, boolean includeCause) {
+        if (meshCaptureFailureLogged) return;
+        meshCaptureFailureLogged = true;
+        String message =
+                "Threadium Minecraft 1.21.1 ModelPart CPU mesh " + reason + "; Vanilla pass-through remains active";
+        if (includeCause) ThreadiumClient.LOGGER.warn(message, exception);
+        else ThreadiumClient.LOGGER.warn("{} ({})", message, exception.getMessage());
+    }
+
+    private void recordMesh(ImmutableModelPartMesh mesh) {
+        lastCapturedPartCount.set(mesh.partCount());
+        lastCapturedQuadCount.set(mesh.quadCount());
+        lastCapturedVertexCount.set(mesh.vertexCount());
+        lastCapturedIndexCount.set(mesh.indexCount());
+        if (!meshCaptureLogged) {
+            meshCaptureLogged = true;
             ThreadiumClient.LOGGER.info(
-                    "Threadium inspected a Minecraft 1.21.1 ModelPart structure ({} parts, {} cuboids); Vanilla pass-through remains active",
-                    snapshot.partCount(),
-                    snapshot.cuboidCount());
+                    "Threadium captured a Minecraft 1.21.1 ModelPart CPU mesh ({} parts, {} quads, {} vertices, {} indices); Vanilla pass-through remains active",
+                    mesh.partCount(),
+                    mesh.quadCount(),
+                    mesh.vertexCount(),
+                    mesh.indexCount());
         }
     }
 
@@ -152,13 +191,22 @@ public final class PassThroughEntityRenderService {
         structureCacheMisses.set(0);
         structureInspectionFailures.set(0);
         structureCapacityRejections.set(0);
-        uniqueStructures.set(0);
-        lastObservedPartCount.set(0);
-        lastObservedCuboidCount.set(0);
+        meshCaptureAttempts.set(0);
+        meshCapturesCompleted.set(0);
+        meshCaptureFailures.set(0);
+        meshCaptureCapacityRejections.set(0);
+        meshRootCacheHits.set(0);
+        meshRootCacheMisses.set(0);
+        uniqueMeshes.set(0);
+        lastCapturedPartCount.set(0);
+        lastCapturedQuadCount.set(0);
+        lastCapturedVertexCount.set(0);
+        lastCapturedIndexCount.set(0);
+        retainedMeshBytes.set(0);
         structureInspector.clear();
         renderDepth = 0;
-        structureLogged = false;
-        inspectionFailureLogged = false;
+        meshCaptureLogged = false;
+        meshCaptureFailureLogged = false;
     }
 
     public record Diagnostics(
@@ -171,7 +219,20 @@ public final class PassThroughEntityRenderService {
             long structureCacheMisses,
             long structureInspectionFailures,
             long structureCapacityRejections,
-            long uniqueStructures,
-            long lastObservedPartCount,
-            long lastObservedCuboidCount) {}
+            long meshCaptureAttempts,
+            long meshCapturesCompleted,
+            long meshCaptureFailures,
+            long meshCaptureCapacityRejections,
+            long meshRootCacheHits,
+            long meshRootCacheMisses,
+            long uniqueMeshes,
+            long lastCapturedPartCount,
+            long lastCapturedQuadCount,
+            long lastCapturedVertexCount,
+            long lastCapturedIndexCount,
+            long retainedMeshBytes) {
+        private static Diagnostics disabled() {
+            return new Diagnostics(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+    }
 }

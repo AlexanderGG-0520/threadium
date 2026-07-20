@@ -1,6 +1,7 @@
 package dev.alex.threadium.render.modelpart.structure;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -14,8 +15,15 @@ final class ModelPartStructureSnapshotTest {
     private static final ModelPartStructureBuilder.Reader<SyntheticPart> READER =
             new ModelPartStructureBuilder.Reader<>() {
                 @Override
-                public List<ModelPartStructureSnapshot.Cuboid> cuboids(SyntheticPart part) {
-                    return part.cuboids;
+                public int cuboidCount(SyntheticPart part) {
+                    return part.cuboidCount;
+                }
+
+                @Override
+                public void captureCuboids(SyntheticPart part, int boneIndex, ModelPartMeshCapture capture) {
+                    part.captureAttempted = true;
+                    capture.beginNode(boneIndex);
+                    for (int cuboid = 0; cuboid < part.cuboidCount; cuboid++) capture.endCuboid();
                 }
 
                 @Override
@@ -25,45 +33,21 @@ final class ModelPartStructureSnapshotTest {
             };
 
     @Test
-    void equalStructuresHaveExactEqualityAndStableFingerprints() {
-        ModelPartStructureSnapshot first = inspect(singleCuboidPart(cuboid(1.0F, 2.0F, false)));
-        ModelPartStructureSnapshot second = inspect(singleCuboidPart(cuboid(1.0F, 2.0F, false)));
-
-        assertEquals(first, second);
-        assertEquals(first.hashCode(), second.hashCode());
-        assertEquals(first.fingerprint(), second.fingerprint());
-    }
-
-    @Test
-    void differentHierarchyShapesAreUnequal() {
+    void differentHierarchyShapesAndCuboidMembershipAreUnequal() {
         SyntheticPart rootOnly = new SyntheticPart();
         SyntheticPart rootWithChild = new SyntheticPart();
         rootWithChild.children.put("child", new SyntheticPart());
+        SyntheticPart rootWithCuboid = new SyntheticPart();
+        rootWithCuboid.cuboidCount = 1;
 
-        assertNotEquals(inspect(rootOnly), inspect(rootWithChild));
+        assertNotEquals(capture(rootOnly).structure(), capture(rootWithChild).structure());
+        assertNotEquals(capture(rootOnly).structure(), capture(rootWithCuboid).structure());
     }
 
     @Test
-    void differentCuboidDimensionsAreUnequal() {
-        assertNotEquals(
-                inspect(singleCuboidPart(cuboid(1.0F, 2.0F, false))),
-                inspect(singleCuboidPart(cuboid(1.0F, 3.0F, false))));
-    }
-
-    @Test
-    void textureCoordinatesAndMirroringEffectsAreStructural() {
-        ModelPartStructureSnapshot ordinary = inspect(singleCuboidPart(cuboid(1.0F, 2.0F, false)));
-        ModelPartStructureSnapshot changedTexture = inspect(singleCuboidPart(cuboid(4.0F, 2.0F, false)));
-        ModelPartStructureSnapshot mirrored = inspect(singleCuboidPart(cuboid(1.0F, 2.0F, true)));
-
-        assertNotEquals(ordinary, changedTexture);
-        assertNotEquals(ordinary, mirrored);
-    }
-
-    @Test
-    void mutablePoseAndVisibilityAreExcluded() {
-        SyntheticPart part = singleCuboidPart(cuboid(1.0F, 2.0F, false));
-        ModelPartStructureSnapshot before = inspect(part);
+    void poseVisibilityAndHiddenStateDoNotChangeIdentity() {
+        SyntheticPart part = new SyntheticPart();
+        ModelPartMeshKey before = capture(part).key();
 
         part.pitch = 0.75F;
         part.pivotX = 12.0F;
@@ -71,19 +55,19 @@ final class ModelPartStructureSnapshotTest {
         part.visible = false;
         part.hidden = true;
 
-        assertEquals(before, inspect(part));
+        assertEquals(before, capture(part).key());
     }
 
     @Test
-    void deterministicTraversalUsesSuppliedChildMapOrder() {
+    void deterministicTraversalAssignsStablePreOrderIndices() {
         SyntheticPart root = new SyntheticPart();
         SyntheticPart firstChild = new SyntheticPart();
         firstChild.children.put("grandchild", new SyntheticPart());
         root.children.put("first", firstChild);
         root.children.put("second", new SyntheticPart());
 
-        ModelPartStructureSnapshot first = inspect(root);
-        ModelPartStructureSnapshot second = inspect(root);
+        ModelPartStructureSnapshot first = capture(root).structure();
+        ModelPartStructureSnapshot second = capture(root).structure();
 
         assertEquals(first, second);
         assertEquals(
@@ -99,67 +83,56 @@ final class ModelPartStructureSnapshotTest {
     }
 
     @Test
-    void fingerprintCollisionCannotCreateStructuralEquality() {
-        ModelPartStructureFingerprint collision = new ModelPartStructureFingerprint(1234L);
+    void callerOwnedNodeCollectionsCannotMutateSnapshot() {
+        ArrayList<ModelPartStructureSnapshot.Node> nodes = new ArrayList<>();
+        ModelPartStructureSnapshot.Node root = new ModelPartStructureSnapshot.Node(0, -1, "root", 0);
+        nodes.add(root);
+        ModelPartStructureSnapshot snapshot = ModelPartStructureSnapshot.of(nodes);
+        nodes.clear();
+
+        assertEquals(1, snapshot.partCount());
+        assertThrows(UnsupportedOperationException.class, () -> snapshot.nodes().add(root));
+    }
+
+    @Test
+    void hierarchyFingerprintCollisionDoesNotReplaceExactEquality() {
+        ModelPartStructureFingerprint collision = new ModelPartStructureFingerprint(1234);
         ModelPartStructureSnapshot first = new ModelPartStructureSnapshot(
-                List.of(new ModelPartStructureSnapshot.Node(0, -1, "root", List.of(cuboid(1.0F, 2.0F, false)))),
-                collision);
+                List.of(new ModelPartStructureSnapshot.Node(0, -1, "root", 0)), collision);
         ModelPartStructureSnapshot second = new ModelPartStructureSnapshot(
-                List.of(new ModelPartStructureSnapshot.Node(0, -1, "root", List.of(cuboid(1.0F, 3.0F, false)))),
-                collision);
+                List.of(new ModelPartStructureSnapshot.Node(0, -1, "root", 1)), collision);
 
         assertEquals(first.hashCode(), second.hashCode());
         assertNotEquals(first, second);
     }
 
     @Test
-    void callerOwnedCollectionsCannotMutateSnapshot() {
-        ArrayList<ModelPartStructureSnapshot.Cuboid> cuboids = new ArrayList<>();
-        cuboids.add(cuboid(1.0F, 2.0F, false));
-        ModelPartStructureSnapshot.Node root = new ModelPartStructureSnapshot.Node(0, -1, "root", cuboids);
-        ArrayList<ModelPartStructureSnapshot.Node> nodes = new ArrayList<>();
-        nodes.add(root);
-        ModelPartStructureSnapshot snapshot = ModelPartStructureSnapshot.of(nodes);
+    void cuboidLimitRejectsBeforeEmission() {
+        SyntheticPart root = new SyntheticPart();
+        root.cuboidCount = 2;
+        ModelPartMeshCapture capture = new ModelPartMeshCapture(ModelPartMeshTestFixtures.DEFAULT_LIMITS);
 
-        cuboids.clear();
-        nodes.clear();
-
-        assertEquals(1, snapshot.partCount());
-        assertEquals(1, snapshot.cuboidCount());
-        assertThrows(UnsupportedOperationException.class, () -> snapshot.nodes().add(root));
         assertThrows(
-                UnsupportedOperationException.class,
-                () -> snapshot.nodes().getFirst().cuboids().clear());
+                ModelPartMeshCapacityException.class,
+                () -> ModelPartStructureBuilder.capture(root, READER, capture, 16, 16, 1));
+        assertFalse(root.captureAttempted);
+        assertEquals(0, capture.vertexCount());
     }
 
-    private static ModelPartStructureSnapshot inspect(SyntheticPart root) {
-        return ModelPartStructureBuilder.inspect(root, READER, 16, 64, 256);
-    }
-
-    private static SyntheticPart singleCuboidPart(ModelPartStructureSnapshot.Cuboid cuboid) {
-        SyntheticPart part = new SyntheticPart();
-        part.cuboids.add(cuboid);
-        return part;
-    }
-
-    private static ModelPartStructureSnapshot.Cuboid cuboid(float textureU, float maxX, boolean mirrored) {
-        ModelPartStructureSnapshot.Vertex a = ModelPartStructureSnapshot.Vertex.from(0, 0, 0, textureU, 0);
-        ModelPartStructureSnapshot.Vertex b = ModelPartStructureSnapshot.Vertex.from(maxX, 0, 0, textureU + 1, 0);
-        ModelPartStructureSnapshot.Vertex c = ModelPartStructureSnapshot.Vertex.from(maxX, 1, 0, textureU + 1, 1);
-        ModelPartStructureSnapshot.Vertex d = ModelPartStructureSnapshot.Vertex.from(0, 1, 0, textureU, 1);
-        List<ModelPartStructureSnapshot.Vertex> vertices = mirrored ? List.of(d, c, b, a) : List.of(a, b, c, d);
-        ModelPartStructureSnapshot.Polygon polygon =
-                ModelPartStructureSnapshot.Polygon.fromNormal(mirrored ? -1 : 1, 0, 0, vertices);
-        return ModelPartStructureSnapshot.Cuboid.fromBounds(0, 0, 0, maxX, 1, 1, List.of(polygon));
+    private static ImmutableModelPartMesh capture(SyntheticPart root) {
+        ModelPartMeshCapture capture = new ModelPartMeshCapture(ModelPartMeshTestFixtures.DEFAULT_LIMITS);
+        ModelPartStructureSnapshot structure = ModelPartStructureBuilder.capture(root, READER, capture, 16, 16, 16);
+        return capture.complete(structure);
     }
 
     private static final class SyntheticPart {
-        private final List<ModelPartStructureSnapshot.Cuboid> cuboids = new ArrayList<>();
         private final Map<String, SyntheticPart> children = new LinkedHashMap<>();
+        private int cuboidCount;
         private float pitch;
         private float pivotX;
         private float scale = 1.0F;
         private boolean visible = true;
         private boolean hidden;
+        private boolean captureAttempted;
     }
 }

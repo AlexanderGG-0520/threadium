@@ -3,7 +3,7 @@ package dev.alex.threadium.render.modelpart.structure;
 import java.util.List;
 import java.util.Objects;
 
-/** Immutable, Minecraft-object-free description of a ModelPart hierarchy's structural geometry. */
+/** Immutable hierarchy metadata. Final geometry identity lives in {@link ModelPartMeshKey}. */
 public final class ModelPartStructureSnapshot {
     private static final long FNV_OFFSET_BASIS = 0xcbf29ce484222325L;
     private static final long FNV_PRIME = 0x100000001b3L;
@@ -20,8 +20,9 @@ public final class ModelPartStructureSnapshot {
         this.nodes = List.copyOf(nodes);
         this.fingerprint = Objects.requireNonNull(fingerprint, "fingerprint");
         validateNodeOrder(this.nodes);
-        this.cuboidCount =
-                this.nodes.stream().mapToInt(node -> node.cuboids().size()).sum();
+        int totalCuboids = 0;
+        for (Node node : this.nodes) totalCuboids = Math.addExact(totalCuboids, node.cuboidCount());
+        this.cuboidCount = totalCuboids;
     }
 
     public static ModelPartStructureSnapshot of(List<Node> nodes) {
@@ -49,7 +50,7 @@ public final class ModelPartStructureSnapshot {
         return this == other || (other instanceof ModelPartStructureSnapshot snapshot && nodes.equals(snapshot.nodes));
     }
 
-    /** Exact node equality remains authoritative when fingerprints collide. */
+    /** Exact node equality remains authoritative when hierarchy fingerprints collide. */
     @Override
     public int hashCode() {
         return Long.hashCode(fingerprint.value());
@@ -65,6 +66,7 @@ public final class ModelPartStructureSnapshot {
             if (position == 0 ? node.parentIndex() != -1 : node.parentIndex() < 0 || node.parentIndex() >= position) {
                 throw new IllegalArgumentException("Node parent must precede its child");
             }
+            if (node.cuboidCount() < 0) throw new IllegalArgumentException("Cuboid count cannot be negative");
         }
     }
 
@@ -74,29 +76,7 @@ public final class ModelPartStructureSnapshot {
             hash = mix(hash, node.index());
             hash = mix(hash, node.parentIndex());
             hash = mixString(hash, node.childName());
-            hash = mix(hash, node.cuboids().size());
-            for (Cuboid cuboid : node.cuboids()) {
-                hash = mix(hash, cuboid.minXBits());
-                hash = mix(hash, cuboid.minYBits());
-                hash = mix(hash, cuboid.minZBits());
-                hash = mix(hash, cuboid.maxXBits());
-                hash = mix(hash, cuboid.maxYBits());
-                hash = mix(hash, cuboid.maxZBits());
-                hash = mix(hash, cuboid.polygons().size());
-                for (Polygon polygon : cuboid.polygons()) {
-                    hash = mix(hash, polygon.normalXBits());
-                    hash = mix(hash, polygon.normalYBits());
-                    hash = mix(hash, polygon.normalZBits());
-                    hash = mix(hash, polygon.vertices().size());
-                    for (Vertex vertex : polygon.vertices()) {
-                        hash = mix(hash, vertex.xBits());
-                        hash = mix(hash, vertex.yBits());
-                        hash = mix(hash, vertex.zBits());
-                        hash = mix(hash, vertex.uBits());
-                        hash = mix(hash, vertex.vBits());
-                    }
-                }
-            }
+            hash = mix(hash, node.cuboidCount());
         }
         return new ModelPartStructureFingerprint(hash);
     }
@@ -111,64 +91,9 @@ public final class ModelPartStructureSnapshot {
         return (hash ^ Integer.toUnsignedLong(value)) * FNV_PRIME;
     }
 
-    public record Node(int index, int parentIndex, String childName, List<Cuboid> cuboids) {
+    public record Node(int index, int parentIndex, String childName, int cuboidCount) {
         public Node {
             Objects.requireNonNull(childName, "childName");
-            cuboids = List.copyOf(cuboids);
-        }
-    }
-
-    /**
-     * Original undilated bounds plus final emitted polygons. The polygons encode dilation, selected faces, texture
-     * coordinates, and mirroring effects that Minecraft 1.21.1 does not retain as constructor fields.
-     */
-    public record Cuboid(
-            int minXBits,
-            int minYBits,
-            int minZBits,
-            int maxXBits,
-            int maxYBits,
-            int maxZBits,
-            List<Polygon> polygons) {
-        public Cuboid {
-            polygons = List.copyOf(polygons);
-        }
-
-        public static Cuboid fromBounds(
-                float minX, float minY, float minZ, float maxX, float maxY, float maxZ, List<Polygon> polygons) {
-            return new Cuboid(
-                    Float.floatToRawIntBits(minX),
-                    Float.floatToRawIntBits(minY),
-                    Float.floatToRawIntBits(minZ),
-                    Float.floatToRawIntBits(maxX),
-                    Float.floatToRawIntBits(maxY),
-                    Float.floatToRawIntBits(maxZ),
-                    polygons);
-        }
-    }
-
-    public record Polygon(int normalXBits, int normalYBits, int normalZBits, List<Vertex> vertices) {
-        public Polygon {
-            vertices = List.copyOf(vertices);
-        }
-
-        public static Polygon fromNormal(float normalX, float normalY, float normalZ, List<Vertex> vertices) {
-            return new Polygon(
-                    Float.floatToRawIntBits(normalX),
-                    Float.floatToRawIntBits(normalY),
-                    Float.floatToRawIntBits(normalZ),
-                    vertices);
-        }
-    }
-
-    public record Vertex(int xBits, int yBits, int zBits, int uBits, int vBits) {
-        public static Vertex from(float x, float y, float z, float u, float v) {
-            return new Vertex(
-                    Float.floatToRawIntBits(x),
-                    Float.floatToRawIntBits(y),
-                    Float.floatToRawIntBits(z),
-                    Float.floatToRawIntBits(u),
-                    Float.floatToRawIntBits(v));
         }
     }
 }

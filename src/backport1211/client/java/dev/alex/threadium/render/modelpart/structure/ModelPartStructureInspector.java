@@ -1,51 +1,60 @@
 package dev.alex.threadium.render.modelpart.structure;
 
 import dev.alex.threadium.mixin.accessor.ModelPartAccessor;
-import dev.alex.threadium.mixin.accessor.ModelPartCuboidAccessor;
-import dev.alex.threadium.mixin.accessor.ModelPartQuadAccessor;
-import dev.alex.threadium.mixin.accessor.ModelPartVertexAccessor;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import net.minecraft.client.model.ModelPart;
-import org.joml.Vector3f;
+import net.minecraft.client.util.math.MatrixStack;
 
-/** Render-thread adapter from Minecraft 1.21.1 ModelPart internals to immutable structural data. */
+/** Render-thread adapter that captures immutable node-local geometry through Vanilla cuboid emission. */
 public final class ModelPartStructureInspector {
     private static final int MAXIMUM_CACHED_ROOTS = 256;
+    private static final int MAXIMUM_UNIQUE_MESHES = 256;
+    private static final long MAXIMUM_RETAINED_BYTES = 64L * 1024 * 1024;
     private static final int MAXIMUM_DEPTH = 128;
     private static final int MAXIMUM_PARTS = 1_024;
     private static final int MAXIMUM_CUBOIDS = 8_192;
-    private static final int MAXIMUM_POLYGONS = 49_152;
-    private static final int MAXIMUM_VERTICES = 196_608;
+    private static final int MAXIMUM_QUADS = 49_152;
+    private static final int MAXIMUM_VERTICES = MAXIMUM_QUADS * 4;
+    private static final int MAXIMUM_INDICES = MAXIMUM_QUADS * 6;
+    private static final long MAXIMUM_MESH_BYTES = 16L * 1024 * 1024;
 
-    private final ModelPartStructureCache cache = new ModelPartStructureCache(MAXIMUM_CACHED_ROOTS);
+    private final ModelPartMeshCache cache =
+            new ModelPartMeshCache(MAXIMUM_CACHED_ROOTS, MAXIMUM_UNIQUE_MESHES, MAXIMUM_RETAINED_BYTES);
 
-    public ModelPartStructureSnapshot cached(ModelPart root) {
+    public ImmutableModelPartMesh cached(ModelPart root) {
         return cache.get(Objects.requireNonNull(root, "root"));
     }
 
-    public boolean canInspectNewRoot() {
-        return cache.hasCapacity();
+    public boolean canCaptureNewRoot() {
+        return cache.canCacheNewRoot();
     }
 
-    public ModelPartStructureSnapshot inspectAndCache(ModelPart root) {
+    public ImmutableModelPartMesh captureAndCache(ModelPart root) {
         Objects.requireNonNull(root, "root");
-        if (!cache.hasCapacity()) throw new IllegalStateException("ModelPart structure cache capacity exceeded");
+        if (!cache.canCacheNewRoot()) throw new ModelPartMeshCapacityException("Root cache is full");
 
-        ModelPartStructureSnapshot snapshot = ModelPartStructureBuilder.inspect(
-                root, new MinecraftReader(), MAXIMUM_DEPTH, MAXIMUM_PARTS, MAXIMUM_CUBOIDS);
-        cache.put(root, snapshot);
-        return snapshot;
+        ModelPartMeshCapture capture = new ModelPartMeshCapture(new ModelPartMeshCapture.Limits(
+                MAXIMUM_PARTS, MAXIMUM_QUADS, MAXIMUM_VERTICES, MAXIMUM_INDICES, MAXIMUM_MESH_BYTES));
+        MatrixStack identityStack = new MatrixStack();
+        MinecraftReader reader = new MinecraftReader(identityStack.peek());
+        ModelPartStructureSnapshot structure =
+                ModelPartStructureBuilder.capture(root, reader, capture, MAXIMUM_DEPTH, MAXIMUM_PARTS, MAXIMUM_CUBOIDS);
+        ImmutableModelPartMesh mesh = capture.complete(structure);
+        return cache.intern(root, mesh);
     }
 
     public int cachedRootCount() {
-        return cache.size();
+        return cache.rootCount();
     }
 
-    public int uniqueStructureCount() {
-        return cache.uniqueStructureCount();
+    public int uniqueMeshCount() {
+        return cache.uniqueMeshCount();
+    }
+
+    public long retainedMeshBytes() {
+        return cache.retainedBytes();
     }
 
     public void clear() {
@@ -53,62 +62,42 @@ public final class ModelPartStructureInspector {
     }
 
     private static final class MinecraftReader implements ModelPartStructureBuilder.Reader<ModelPart> {
-        private int polygonCount;
-        private int vertexCount;
+        private static final int CAPTURE_LIGHT = 0x24681357;
+        private static final int CAPTURE_OVERLAY = 0x13572468;
+        private static final int CAPTURE_COLOR = 0xa1b2c3d4;
+
+        private final MatrixStack.Entry identityEntry;
+
+        private MinecraftReader(MatrixStack.Entry identityEntry) {
+            this.identityEntry = identityEntry;
+        }
 
         @Override
-        public List<ModelPartStructureSnapshot.Cuboid> cuboids(ModelPart part) {
+        public int cuboidCount(ModelPart part) {
+            return cuboids(part).size();
+        }
+
+        @Override
+        public void captureCuboids(ModelPart part, int boneIndex, ModelPartMeshCapture capture) {
+            List<ModelPart.Cuboid> cuboids = cuboids(part);
+            VanillaCuboidCaptureConsumer consumer = new VanillaCuboidCaptureConsumer(capture);
+            capture.beginNode(boneIndex);
+            for (ModelPart.Cuboid cuboid : cuboids) {
+                Objects.requireNonNull(cuboid, "cuboid")
+                        .renderCuboid(identityEntry, consumer, CAPTURE_LIGHT, CAPTURE_OVERLAY, CAPTURE_COLOR);
+                capture.endCuboid();
+            }
+        }
+
+        private static List<ModelPart.Cuboid> cuboids(ModelPart part) {
             ModelPartAccessor accessor = (ModelPartAccessor) (Object) part;
-            List<ModelPart.Cuboid> sourceCuboids = Objects.requireNonNull(accessor.threadium$getCuboids(), "cuboids");
-            ArrayList<ModelPartStructureSnapshot.Cuboid> cuboids = new ArrayList<>(sourceCuboids.size());
-            for (ModelPart.Cuboid cuboid : sourceCuboids) cuboids.add(inspectCuboid(Objects.requireNonNull(cuboid)));
-            return cuboids;
+            return Objects.requireNonNull(accessor.threadium$getCuboids(), "cuboids");
         }
 
         @Override
         public Map<String, ModelPart> children(ModelPart part) {
             ModelPartAccessor accessor = (ModelPartAccessor) (Object) part;
             return Objects.requireNonNull(accessor.threadium$getChildren(), "children");
-        }
-
-        private ModelPartStructureSnapshot.Cuboid inspectCuboid(ModelPart.Cuboid cuboid) {
-            Object[] sides = ((ModelPartCuboidAccessor) (Object) cuboid).threadium$getSides();
-            Objects.requireNonNull(sides, "cuboid sides");
-            if ((long) polygonCount + sides.length > MAXIMUM_POLYGONS) {
-                throw new IllegalArgumentException("ModelPart polygon limit exceeded");
-            }
-
-            ArrayList<ModelPartStructureSnapshot.Polygon> polygons = new ArrayList<>(sides.length);
-            for (Object side : sides) polygons.add(inspectPolygon(Objects.requireNonNull(side, "cuboid side")));
-            polygonCount += sides.length;
-            return ModelPartStructureSnapshot.Cuboid.fromBounds(
-                    cuboid.minX, cuboid.minY, cuboid.minZ, cuboid.maxX, cuboid.maxY, cuboid.maxZ, polygons);
-        }
-
-        private ModelPartStructureSnapshot.Polygon inspectPolygon(Object side) {
-            ModelPartQuadAccessor accessor = (ModelPartQuadAccessor) side;
-            Object[] vertices = Objects.requireNonNull(accessor.threadium$getVertices(), "quad vertices");
-            if (vertices.length != 4)
-                throw new IllegalArgumentException("ModelPart quad does not contain four vertices");
-            if ((long) vertexCount + vertices.length > MAXIMUM_VERTICES) {
-                throw new IllegalArgumentException("ModelPart vertex limit exceeded");
-            }
-
-            ArrayList<ModelPartStructureSnapshot.Vertex> copiedVertices = new ArrayList<>(vertices.length);
-            for (Object vertex : vertices)
-                copiedVertices.add(inspectVertex(Objects.requireNonNull(vertex, "quad vertex")));
-            vertexCount += vertices.length;
-
-            Vector3f direction = Objects.requireNonNull(accessor.threadium$getDirection(), "quad direction");
-            return ModelPartStructureSnapshot.Polygon.fromNormal(
-                    direction.x(), direction.y(), direction.z(), copiedVertices);
-        }
-
-        private static ModelPartStructureSnapshot.Vertex inspectVertex(Object vertex) {
-            ModelPartVertexAccessor accessor = (ModelPartVertexAccessor) vertex;
-            Vector3f position = Objects.requireNonNull(accessor.threadium$getPosition(), "vertex position");
-            return ModelPartStructureSnapshot.Vertex.from(
-                    position.x(), position.y(), position.z(), accessor.threadium$getU(), accessor.threadium$getV());
         }
     }
 }

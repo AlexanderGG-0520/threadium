@@ -10,22 +10,29 @@ import java.util.Objects;
 final class ModelPartStructureBuilder {
     private ModelPartStructureBuilder() {}
 
-    static <T> ModelPartStructureSnapshot inspect(
-            T root, Reader<T> reader, int maximumDepth, int maximumParts, int maximumCuboids) {
+    static <T> ModelPartStructureSnapshot capture(
+            T root,
+            Reader<T> reader,
+            ModelPartMeshCapture capture,
+            int maximumDepth,
+            int maximumParts,
+            int maximumCuboids) {
         ArrayList<ModelPartStructureSnapshot.Node> nodes = new ArrayList<>();
         IdentityHashMap<T, Boolean> visited = new IdentityHashMap<>();
+        TraversalState state = new TraversalState();
         visit(
                 Objects.requireNonNull(root, "root"),
                 -1,
                 "root",
                 0,
                 reader,
+                capture,
                 maximumDepth,
                 maximumParts,
                 maximumCuboids,
                 nodes,
                 visited,
-                new int[1]);
+                state);
         return ModelPartStructureSnapshot.of(nodes);
     }
 
@@ -35,27 +42,28 @@ final class ModelPartStructureBuilder {
             String childName,
             int depth,
             Reader<T> reader,
+            ModelPartMeshCapture capture,
             int maximumDepth,
             int maximumParts,
             int maximumCuboids,
             List<ModelPartStructureSnapshot.Node> nodes,
             IdentityHashMap<T, Boolean> visited,
-            int[] cuboidCount) {
+            TraversalState state) {
         if (depth > maximumDepth || nodes.size() >= maximumParts) {
-            throw new IllegalArgumentException("ModelPart hierarchy limit exceeded");
+            throw new ModelPartMeshCapacityException("ModelPart hierarchy limit exceeded");
         }
         if (visited.put(part, Boolean.TRUE) != null) {
             throw new IllegalArgumentException("ModelPart hierarchy is cyclic or shares a child instance");
         }
 
-        List<ModelPartStructureSnapshot.Cuboid> cuboids = List.copyOf(reader.cuboids(part));
-        if ((long) cuboidCount[0] + cuboids.size() > maximumCuboids) {
-            throw new IllegalArgumentException("ModelPart cuboid limit exceeded");
-        }
-        cuboidCount[0] += cuboids.size();
-
         int nodeIndex = nodes.size();
-        nodes.add(new ModelPartStructureSnapshot.Node(nodeIndex, parentIndex, childName, cuboids));
+        int cuboidCount = reader.cuboidCount(part);
+        if (cuboidCount < 0 || (long) state.cuboidCount + cuboidCount > maximumCuboids) {
+            throw new ModelPartMeshCapacityException("ModelPart cuboid limit exceeded");
+        }
+        state.cuboidCount += cuboidCount;
+        reader.captureCuboids(part, nodeIndex, capture);
+        nodes.add(new ModelPartStructureSnapshot.Node(nodeIndex, parentIndex, childName, cuboidCount));
 
         // The reader supplies Minecraft's map; entrySet preserves the same iteration order as render's values().
         for (Map.Entry<String, T> child :
@@ -66,18 +74,25 @@ final class ModelPartStructureBuilder {
                     Objects.requireNonNull(child.getKey(), "child name"),
                     depth + 1,
                     reader,
+                    capture,
                     maximumDepth,
                     maximumParts,
                     maximumCuboids,
                     nodes,
                     visited,
-                    cuboidCount);
+                    state);
         }
     }
 
     interface Reader<T> {
-        List<ModelPartStructureSnapshot.Cuboid> cuboids(T part);
+        int cuboidCount(T part);
+
+        void captureCuboids(T part, int boneIndex, ModelPartMeshCapture capture);
 
         Map<String, T> children(T part);
+    }
+
+    private static final class TraversalState {
+        private int cuboidCount;
     }
 }

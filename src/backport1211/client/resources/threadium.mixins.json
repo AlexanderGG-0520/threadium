@@ -5,10 +5,7 @@
   "client": [
     "GameRendererMixin",
     "ModelPartMixin",
-    "accessor.ModelPartAccessor",
-    "accessor.ModelPartCuboidAccessor",
-    "accessor.ModelPartQuadAccessor",
-    "accessor.ModelPartVertexAccessor"
+    "accessor.ModelPartAccessor"
   ],
   "injectors": {
     "defaultRequire": 1
