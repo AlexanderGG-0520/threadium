@@ -1,14 +1,20 @@
 package dev.alex.threadium.render.entity;
 
 import dev.alex.threadium.ThreadiumClient;
+import dev.alex.threadium.render.modelpart.pose.ImmutableModelPartBonePose;
+import dev.alex.threadium.render.modelpart.pose.ImmutableRootRenderTransform;
+import dev.alex.threadium.render.modelpart.pose.ModelPartInvocationSnapshot;
+import dev.alex.threadium.render.modelpart.pose.ModelPartPoseCapacityException;
+import dev.alex.threadium.render.modelpart.pose.ModelPartPoseInspector;
 import dev.alex.threadium.render.modelpart.structure.ImmutableModelPartMesh;
 import dev.alex.threadium.render.modelpart.structure.ModelPartMeshCapacityException;
 import dev.alex.threadium.render.modelpart.structure.ModelPartStructureInspector;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.model.ModelPart;
+import net.minecraft.client.util.math.MatrixStack;
 
-/** M1 CPU-mesh observer. It never acquires rendering ownership and cannot suppress Vanilla rendering. */
+/** M2 CPU mesh-and-pose observer. It never acquires rendering ownership and cannot suppress Vanilla rendering. */
 public final class PassThroughEntityRenderService {
     private static volatile PassThroughEntityRenderService instance;
 
@@ -32,10 +38,28 @@ public final class PassThroughEntityRenderService {
     private final AtomicLong lastCapturedVertexCount = new AtomicLong();
     private final AtomicLong lastCapturedIndexCount = new AtomicLong();
     private final AtomicLong retainedMeshBytes = new AtomicLong();
+    private final AtomicLong poseCaptureAttempts = new AtomicLong();
+    private final AtomicLong poseCapturesCompleted = new AtomicLong();
+    private final AtomicLong poseCaptureFailures = new AtomicLong();
+    private final AtomicLong poseCapacityRejections = new AtomicLong();
+    private final AtomicLong poseCacheHits = new AtomicLong();
+    private final AtomicLong poseCacheMisses = new AtomicLong();
+    private final AtomicLong uniquePosesThisFrame = new AtomicLong();
+    private final AtomicLong lastPoseBoneCount = new AtomicLong();
+    private final AtomicLong lastTreeVisibleBoneCount = new AtomicLong();
+    private final AtomicLong lastDrawVisibleBoneCount = new AtomicLong();
+    private final AtomicLong lastPoseBytes = new AtomicLong();
+    private final AtomicLong retainedPoseBytesThisFrame = new AtomicLong();
+    private final AtomicLong nonFinitePoseCaptures = new AtomicLong();
+    private final AtomicLong rootTransformCaptures = new AtomicLong();
     private final ModelPartStructureInspector structureInspector = new ModelPartStructureInspector();
+    private final ModelPartPoseInspector poseInspector = new ModelPartPoseInspector();
+    private ModelPartInvocationSnapshot lastInvocation;
     private int renderDepth;
     private boolean meshCaptureLogged;
     private boolean meshCaptureFailureLogged;
+    private boolean poseCaptureLogged;
+    private boolean poseCaptureFailureLogged;
     private volatile boolean enabled = true;
 
     private PassThroughEntityRenderService() {}
@@ -46,10 +70,10 @@ public final class PassThroughEntityRenderService {
 
     public static void beginFrame() {
         PassThroughEntityRenderService current = instance;
-        if (current != null) current.renderDepth = 0;
+        if (current != null) current.resetFrameState();
     }
 
-    public static void beginModelPartRender(ModelPart part) {
+    public static void beginModelPartRender(ModelPart part, MatrixStack matrices, int light, int overlay, int color) {
         PassThroughEntityRenderService current = instance;
         if (current == null || !current.enabled) return;
         if (current.observedModelPartRenders.getAndIncrement() == 0) {
@@ -57,7 +81,7 @@ public final class PassThroughEntityRenderService {
                     "Threadium detected Minecraft 1.21.1 ModelPart rendering; Vanilla pass-through remains active");
         }
         if (current.renderDepth++ != 0) return;
-        current.captureStructure(part);
+        current.captureInvocation(part, matrices, light, overlay, color);
     }
 
     public static void endModelPartRender() {
@@ -113,23 +137,44 @@ public final class PassThroughEntityRenderService {
                         current.lastCapturedQuadCount.get(),
                         current.lastCapturedVertexCount.get(),
                         current.lastCapturedIndexCount.get(),
-                        current.retainedMeshBytes.get());
+                        current.retainedMeshBytes.get(),
+                        current.poseCaptureAttempts.get(),
+                        current.poseCapturesCompleted.get(),
+                        current.poseCaptureFailures.get(),
+                        current.poseCapacityRejections.get(),
+                        current.poseCacheHits.get(),
+                        current.poseCacheMisses.get(),
+                        current.uniquePosesThisFrame.get(),
+                        current.lastPoseBoneCount.get(),
+                        current.lastTreeVisibleBoneCount.get(),
+                        current.lastDrawVisibleBoneCount.get(),
+                        current.lastPoseBytes.get(),
+                        current.retainedPoseBytesThisFrame.get(),
+                        current.nonFinitePoseCaptures.get(),
+                        current.rootTransformCaptures.get());
     }
 
-    private void captureStructure(ModelPart root) {
+    private void captureInvocation(ModelPart root, MatrixStack matrices, int light, int overlay, int color) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || !client.isOnThread()) {
             structureInspectionFailures.incrementAndGet();
             meshCaptureFailures.incrementAndGet();
+            poseCaptureFailures.incrementAndGet();
             return;
         }
+
+        ImmutableModelPartMesh mesh = captureStructure(root);
+        if (mesh != null) capturePose(root, mesh, matrices, light, overlay, color);
+    }
+
+    private ImmutableModelPartMesh captureStructure(ModelPart root) {
 
         ImmutableModelPartMesh mesh = structureInspector.cached(root);
         if (mesh != null) {
             structureCacheHits.incrementAndGet();
             meshRootCacheHits.incrementAndGet();
             recordMesh(mesh);
-            return;
+            return mesh;
         }
 
         structureCacheMisses.incrementAndGet();
@@ -137,7 +182,7 @@ public final class PassThroughEntityRenderService {
         if (!structureInspector.canCaptureNewRoot()) {
             structureCapacityRejections.incrementAndGet();
             meshCaptureCapacityRejections.incrementAndGet();
-            return;
+            return null;
         }
 
         meshCaptureAttempts.incrementAndGet();
@@ -148,15 +193,69 @@ public final class PassThroughEntityRenderService {
             uniqueMeshes.set(structureInspector.uniqueMeshCount());
             retainedMeshBytes.set(structureInspector.retainedMeshBytes());
             recordMesh(mesh);
+            return mesh;
         } catch (ModelPartMeshCapacityException exception) {
             structureCapacityRejections.incrementAndGet();
             meshCaptureCapacityRejections.incrementAndGet();
             warnCaptureFailureOnce("capacity limit reached", exception, false);
+            return null;
         } catch (RuntimeException exception) {
             structureInspectionFailures.incrementAndGet();
             meshCaptureFailures.incrementAndGet();
             warnCaptureFailureOnce("capture failed", exception, true);
+            return null;
         }
+    }
+
+    private void capturePose(
+            ModelPart root, ImmutableModelPartMesh mesh, MatrixStack matrices, int light, int overlay, int color) {
+        lastInvocation = null;
+        poseCaptureAttempts.incrementAndGet();
+        try {
+            ImmutableRootRenderTransform rootTransform = poseInspector.captureRoot(matrices.peek());
+            rootTransformCaptures.incrementAndGet();
+            boolean rootIsFinite = rootTransform.finite();
+            if (!rootIsFinite) nonFinitePoseCaptures.incrementAndGet();
+            ModelPartPoseInspector.PoseObservation observation = poseInspector.capturePose(root, mesh);
+            ImmutableModelPartBonePose pose = observation.pose();
+            poseCapturesCompleted.incrementAndGet();
+            if (observation.poseCacheHit()) poseCacheHits.incrementAndGet();
+            else poseCacheMisses.incrementAndGet();
+            uniquePosesThisFrame.set(poseInspector.uniquePoseCount());
+            retainedPoseBytesThisFrame.set(poseInspector.retainedPoseBytes());
+            lastPoseBoneCount.set(pose.boneCount());
+            lastTreeVisibleBoneCount.set(pose.treeVisibleCount());
+            lastDrawVisibleBoneCount.set(pose.drawVisibleCount());
+            lastPoseBytes.set(pose.retainedBytes());
+            if (!pose.finite() && rootIsFinite) nonFinitePoseCaptures.incrementAndGet();
+            lastInvocation = new ModelPartInvocationSnapshot(
+                    mesh, pose, rootTransform, light, overlay, color, worldGeneration.get(), resourceGeneration.get());
+            recordPose(pose);
+        } catch (ModelPartPoseCapacityException exception) {
+            poseCapacityRejections.incrementAndGet();
+            warnPoseFailureOnce("capacity limit reached", exception, false);
+        } catch (RuntimeException exception) {
+            poseCaptureFailures.incrementAndGet();
+            warnPoseFailureOnce("capture failed", exception, true);
+        }
+    }
+
+    private void recordPose(ImmutableModelPartBonePose pose) {
+        if (poseCaptureLogged) return;
+        poseCaptureLogged = true;
+        ThreadiumClient.LOGGER.info(
+                "Threadium captured a Minecraft 1.21.1 ModelPart pose ({} bones, {} draw-visible); Vanilla pass-through remains active",
+                pose.boneCount(),
+                pose.drawVisibleCount());
+    }
+
+    private void warnPoseFailureOnce(String reason, RuntimeException exception, boolean includeCause) {
+        if (poseCaptureFailureLogged) return;
+        poseCaptureFailureLogged = true;
+        String message =
+                "Threadium Minecraft 1.21.1 ModelPart pose " + reason + "; Vanilla pass-through remains active";
+        if (includeCause) ThreadiumClient.LOGGER.warn(message, exception);
+        else ThreadiumClient.LOGGER.warn("{} ({})", message, exception.getMessage());
     }
 
     private void warnCaptureFailureOnce(String reason, RuntimeException exception, boolean includeCause) {
@@ -203,10 +302,36 @@ public final class PassThroughEntityRenderService {
         lastCapturedVertexCount.set(0);
         lastCapturedIndexCount.set(0);
         retainedMeshBytes.set(0);
+        poseCaptureAttempts.set(0);
+        poseCapturesCompleted.set(0);
+        poseCaptureFailures.set(0);
+        poseCapacityRejections.set(0);
+        poseCacheHits.set(0);
+        poseCacheMisses.set(0);
+        uniquePosesThisFrame.set(0);
+        lastPoseBoneCount.set(0);
+        lastTreeVisibleBoneCount.set(0);
+        lastDrawVisibleBoneCount.set(0);
+        lastPoseBytes.set(0);
+        retainedPoseBytesThisFrame.set(0);
+        nonFinitePoseCaptures.set(0);
+        rootTransformCaptures.set(0);
         structureInspector.clear();
+        poseInspector.clear();
+        lastInvocation = null;
         renderDepth = 0;
         meshCaptureLogged = false;
         meshCaptureFailureLogged = false;
+        poseCaptureLogged = false;
+        poseCaptureFailureLogged = false;
+    }
+
+    private void resetFrameState() {
+        renderDepth = 0;
+        poseInspector.beginFrame();
+        lastInvocation = null;
+        uniquePosesThisFrame.set(0);
+        retainedPoseBytesThisFrame.set(0);
     }
 
     public record Diagnostics(
@@ -230,9 +355,25 @@ public final class PassThroughEntityRenderService {
             long lastCapturedQuadCount,
             long lastCapturedVertexCount,
             long lastCapturedIndexCount,
-            long retainedMeshBytes) {
+            long retainedMeshBytes,
+            long poseCaptureAttempts,
+            long poseCapturesCompleted,
+            long poseCaptureFailures,
+            long poseCapacityRejections,
+            long poseCacheHits,
+            long poseCacheMisses,
+            long uniquePosesThisFrame,
+            long lastPoseBoneCount,
+            long lastTreeVisibleBoneCount,
+            long lastDrawVisibleBoneCount,
+            long lastPoseBytes,
+            long retainedPoseBytesThisFrame,
+            long nonFinitePoseCaptures,
+            long rootTransformCaptures) {
         private static Diagnostics disabled() {
-            return new Diagnostics(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            return new Diagnostics(
+                    false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0);
         }
     }
 }

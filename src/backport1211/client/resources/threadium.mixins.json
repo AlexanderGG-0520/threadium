@@ -5,6 +5,7 @@
   "client": [
     "GameRendererMixin",
     "ModelPartMixin",
+    "accessor.MatrixStackEntryAccessor",
     "accessor.ModelPartAccessor"
   ],
   "injectors": {
