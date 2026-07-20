@@ -13,6 +13,7 @@
     "issues": "https://github.com/AlexanderGG-0520/threadium/issues"
   },
   "license": "MIT",
+  "icon": "assets/threadium/icon.png",
   "environment": "client",
   "entrypoints": {
     "client": [
