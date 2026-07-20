@@ -5,6 +5,8 @@
   "client": [
     "GameRendererMixin",
     "ModelPartMixin",
+    "OutlineVertexConsumerProviderMixin",
+    "VertexConsumerProviderImmediateMixin",
     "accessor.MatrixStackEntryAccessor",
     "accessor.ModelPartAccessor"
   ],

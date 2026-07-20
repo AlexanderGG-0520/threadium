@@ -24,7 +24,8 @@ abstract class ModelPartMixin {
             int overlay,
             int color,
             CallbackInfo callbackInfo) {
-        PassThroughEntityRenderService.beginModelPartRender((ModelPart) (Object) this, matrices, light, overlay, color);
+        PassThroughEntityRenderService.beginModelPartRender(
+                (ModelPart) (Object) this, matrices, vertexConsumer, light, overlay, color);
     }
 
     @Inject(

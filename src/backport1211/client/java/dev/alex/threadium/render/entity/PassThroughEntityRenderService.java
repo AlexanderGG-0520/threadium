@@ -1,6 +1,10 @@
 package dev.alex.threadium.render.entity;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import dev.alex.threadium.ThreadiumClient;
+import dev.alex.threadium.render.modelpart.material.MaterialContextResolution;
+import dev.alex.threadium.render.modelpart.material.MaterialResolutionStatus;
+import dev.alex.threadium.render.modelpart.material.ModelPartMaterialContextTracker;
 import dev.alex.threadium.render.modelpart.pose.ImmutableModelPartBonePose;
 import dev.alex.threadium.render.modelpart.pose.ImmutableRootRenderTransform;
 import dev.alex.threadium.render.modelpart.pose.ModelPartInvocationSnapshot;
@@ -12,9 +16,11 @@ import dev.alex.threadium.render.modelpart.structure.ModelPartStructureInspector
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.model.ModelPart;
+import net.minecraft.client.render.RenderLayer;
+import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.util.math.MatrixStack;
 
-/** M2 CPU mesh-and-pose observer. It never acquires rendering ownership and cannot suppress Vanilla rendering. */
+/** M3A CPU and material-context observer. It never acquires rendering ownership or suppresses Vanilla rendering. */
 public final class PassThroughEntityRenderService {
     private static volatile PassThroughEntityRenderService instance;
 
@@ -54,12 +60,19 @@ public final class PassThroughEntityRenderService {
     private final AtomicLong rootTransformCaptures = new AtomicLong();
     private final ModelPartStructureInspector structureInspector = new ModelPartStructureInspector();
     private final ModelPartPoseInspector poseInspector = new ModelPartPoseInspector();
+    private final ModelPartMaterialContextTracker<Object, RenderLayer, VertexConsumer> materialTracker =
+            new ModelPartMaterialContextTracker<>();
     private ModelPartInvocationSnapshot lastInvocation;
+    private MaterialContextResolution<Object, RenderLayer> lastMaterialResolution;
     private int renderDepth;
     private boolean meshCaptureLogged;
     private boolean meshCaptureFailureLogged;
     private boolean poseCaptureLogged;
     private boolean poseCaptureFailureLogged;
+    private boolean directMaterialLogged;
+    private boolean unresolvedMaterialLogged;
+    private boolean materialCapacityLogged;
+    private boolean materialFailureLogged;
     private volatile boolean enabled = true;
 
     private PassThroughEntityRenderService() {}
@@ -73,7 +86,8 @@ public final class PassThroughEntityRenderService {
         if (current != null) current.resetFrameState();
     }
 
-    public static void beginModelPartRender(ModelPart part, MatrixStack matrices, int light, int overlay, int color) {
+    public static void beginModelPartRender(
+            ModelPart part, MatrixStack matrices, VertexConsumer vertexConsumer, int light, int overlay, int color) {
         PassThroughEntityRenderService current = instance;
         if (current == null || !current.enabled) return;
         if (current.observedModelPartRenders.getAndIncrement() == 0) {
@@ -81,7 +95,17 @@ public final class PassThroughEntityRenderService {
                     "Threadium detected Minecraft 1.21.1 ModelPart rendering; Vanilla pass-through remains active");
         }
         if (current.renderDepth++ != 0) return;
-        current.captureInvocation(part, matrices, light, overlay, color);
+        current.captureInvocation(part, matrices, vertexConsumer, light, overlay, color);
+    }
+
+    /**
+     * Called only from return injections; the exact Vanilla objects are observed and returned control flow is
+     * untouched.
+     */
+    public static void observeMaterialProviderRequest(Object provider, RenderLayer layer, VertexConsumer consumer) {
+        PassThroughEntityRenderService current = instance;
+        if (current == null || !current.enabled) return;
+        current.registerMaterialBinding(provider, layer, consumer);
     }
 
     public static void endModelPartRender() {
@@ -114,6 +138,9 @@ public final class PassThroughEntityRenderService {
 
     public static Diagnostics diagnostics() {
         PassThroughEntityRenderService current = instance;
+        ModelPartMaterialContextTracker.Diagnostics material = current == null
+                ? new ModelPartMaterialContextTracker<>().diagnostics()
+                : current.materialTracker.diagnostics();
         return current == null
                 ? Diagnostics.disabled()
                 : new Diagnostics(
@@ -151,20 +178,84 @@ public final class PassThroughEntityRenderService {
                         current.lastPoseBytes.get(),
                         current.retainedPoseBytesThisFrame.get(),
                         current.nonFinitePoseCaptures.get(),
-                        current.rootTransformCaptures.get());
+                        current.rootTransformCaptures.get(),
+                        material);
     }
 
-    private void captureInvocation(ModelPart root, MatrixStack matrices, int light, int overlay, int color) {
+    private void captureInvocation(
+            ModelPart root, MatrixStack matrices, VertexConsumer vertexConsumer, int light, int overlay, int color) {
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client == null || !client.isOnThread()) {
+        if (client == null || !client.isOnThread() || !RenderSystem.isOnRenderThread()) {
             structureInspectionFailures.incrementAndGet();
             meshCaptureFailures.incrementAndGet();
             poseCaptureFailures.incrementAndGet();
+            materialTracker.recordTrackingFailure();
             return;
         }
 
+        resolveMaterial(vertexConsumer);
         ImmutableModelPartMesh mesh = captureStructure(root);
         if (mesh != null) capturePose(root, mesh, matrices, light, overlay, color);
+    }
+
+    private void registerMaterialBinding(Object provider, RenderLayer layer, VertexConsumer consumer) {
+        try {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client == null || !client.isOnThread() || !RenderSystem.isOnRenderThread()) {
+                materialTracker.recordTrackingFailure();
+                warnMaterialFailureOnce("provider observation occurred off the Render Thread", null);
+                return;
+            }
+            ModelPartMaterialContextTracker.RegistrationResult result =
+                    materialTracker.register(provider, layer, consumer);
+            if (result == ModelPartMaterialContextTracker.RegistrationResult.CAPACITY_REJECTED) {
+                warnMaterialCapacityOnce();
+            }
+        } catch (RuntimeException exception) {
+            materialTracker.recordTrackingFailure();
+            warnMaterialFailureOnce("provider observation failed", exception);
+        }
+    }
+
+    private void resolveMaterial(VertexConsumer consumer) {
+        lastMaterialResolution = null;
+        try {
+            MaterialContextResolution<Object, RenderLayer> resolution = materialTracker.observeResolution(consumer);
+            lastMaterialResolution = resolution;
+            if (resolution.status() == MaterialResolutionStatus.DIRECT_UNIQUE) {
+                if (!directMaterialLogged) {
+                    directMaterialLogged = true;
+                    ThreadiumClient.LOGGER.info(
+                            "Threadium directly associated a Minecraft 1.21.1 ModelPart VertexConsumer with a RenderLayer; Vanilla pass-through remains active");
+                }
+            } else if (resolution.status() == MaterialResolutionStatus.UNRESOLVED && !unresolvedMaterialLogged) {
+                unresolvedMaterialLogged = true;
+                ThreadiumClient.LOGGER.info(
+                        "Threadium observed an unresolved Minecraft 1.21.1 ModelPart VertexConsumer ({}); Vanilla pass-through remains active",
+                        resolution.unresolvedConsumerClass());
+            } else if (resolution.status() == MaterialResolutionStatus.CAPACITY_REJECTED) {
+                warnMaterialCapacityOnce();
+            }
+        } catch (RuntimeException exception) {
+            materialTracker.recordTrackingFailure();
+            warnMaterialFailureOnce("consumer resolution failed", exception);
+        }
+    }
+
+    private void warnMaterialCapacityOnce() {
+        if (materialCapacityLogged) return;
+        materialCapacityLogged = true;
+        ThreadiumClient.LOGGER.warn(
+                "Threadium Minecraft 1.21.1 material-context capacity was reached; Vanilla pass-through remains active");
+    }
+
+    private void warnMaterialFailureOnce(String reason, RuntimeException exception) {
+        if (materialFailureLogged) return;
+        materialFailureLogged = true;
+        String message =
+                "Threadium Minecraft 1.21.1 material-context " + reason + "; Vanilla pass-through remains active";
+        if (exception == null) ThreadiumClient.LOGGER.warn(message);
+        else ThreadiumClient.LOGGER.warn(message, exception);
     }
 
     private ImmutableModelPartMesh captureStructure(ModelPart root) {
@@ -318,18 +409,26 @@ public final class PassThroughEntityRenderService {
         rootTransformCaptures.set(0);
         structureInspector.clear();
         poseInspector.clear();
+        materialTracker.clearLifecycle();
         lastInvocation = null;
+        lastMaterialResolution = null;
         renderDepth = 0;
         meshCaptureLogged = false;
         meshCaptureFailureLogged = false;
         poseCaptureLogged = false;
         poseCaptureFailureLogged = false;
+        directMaterialLogged = false;
+        unresolvedMaterialLogged = false;
+        materialCapacityLogged = false;
+        materialFailureLogged = false;
     }
 
     private void resetFrameState() {
         renderDepth = 0;
         poseInspector.beginFrame();
+        materialTracker.beginFrame();
         lastInvocation = null;
+        lastMaterialResolution = null;
         uniquePosesThisFrame.set(0);
         retainedPoseBytesThisFrame.set(0);
     }
@@ -369,11 +468,14 @@ public final class PassThroughEntityRenderService {
             long lastPoseBytes,
             long retainedPoseBytesThisFrame,
             long nonFinitePoseCaptures,
-            long rootTransformCaptures) {
+            long rootTransformCaptures,
+            ModelPartMaterialContextTracker.Diagnostics material) {
         private static Diagnostics disabled() {
+            ModelPartMaterialContextTracker.Diagnostics material =
+                    new ModelPartMaterialContextTracker<>().diagnostics();
             return new Diagnostics(
                     false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0);
+                    0, 0, 0, material);
         }
     }
 }
