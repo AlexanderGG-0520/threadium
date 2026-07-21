@@ -1,6 +1,7 @@
 package dev.alex.threadium.mixin;
 
 import dev.alex.threadium.render.entity.PassThroughEntityRenderService;
+import dev.alex.threadium.render.modelpart.material.MaterialProviderSource;
 import net.minecraft.client.render.OutlineVertexConsumerProvider;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
@@ -18,6 +19,7 @@ abstract class OutlineVertexConsumerProviderMixin {
             require = 1)
     private void threadium$observeReturnedConsumer(
             RenderLayer layer, CallbackInfoReturnable<VertexConsumer> callbackInfo) {
-        PassThroughEntityRenderService.observeMaterialProviderRequest(this, layer, callbackInfo.getReturnValue());
+        PassThroughEntityRenderService.observeMaterialProviderRequest(
+                MaterialProviderSource.OUTLINE, this, layer, callbackInfo.getReturnValue());
     }
 }

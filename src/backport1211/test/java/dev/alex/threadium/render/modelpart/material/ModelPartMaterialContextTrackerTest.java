@@ -24,6 +24,15 @@ final class ModelPartMaterialContextTrackerTest {
     }
 
     @Test
+    void explicitProviderSourceIsPreservedWithoutChangingIdentitySemantics() {
+        Fixture fixture = new Fixture();
+        fixture.tracker.register(fixture.provider, fixture.layer, fixture.consumer, MaterialProviderSource.OUTLINE);
+        MaterialContextResolution<Object, Object> resolution = fixture.tracker.resolve(fixture.consumer);
+        assertEquals(MaterialProviderSource.OUTLINE, resolution.providerSource());
+        assertEquals(MaterialResolutionStatus.DIRECT_UNIQUE, resolution.status());
+    }
+
+    @Test
     void repeatedExactRegistrationRefreshesWithoutLosingUniqueness() {
         Fixture fixture = new Fixture();
         fixture.tracker.register(fixture.provider, fixture.layer, fixture.consumer);

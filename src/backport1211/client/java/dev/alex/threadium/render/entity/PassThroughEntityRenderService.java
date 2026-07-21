@@ -2,7 +2,12 @@ package dev.alex.threadium.render.entity;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.alex.threadium.ThreadiumClient;
+import dev.alex.threadium.lifecycle.RenderThreadLifecycleDispatcher;
 import dev.alex.threadium.render.modelpart.material.MaterialContextResolution;
+import dev.alex.threadium.render.modelpart.material.MaterialPathCharacterizer;
+import dev.alex.threadium.render.modelpart.material.MaterialPathDiagnosticCache;
+import dev.alex.threadium.render.modelpart.material.MaterialPathDiagnosticData;
+import dev.alex.threadium.render.modelpart.material.MaterialProviderSource;
 import dev.alex.threadium.render.modelpart.material.MaterialResolutionStatus;
 import dev.alex.threadium.render.modelpart.material.ModelPartMaterialContextTracker;
 import dev.alex.threadium.render.modelpart.pose.ImmutableModelPartBonePose;
@@ -20,7 +25,7 @@ import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.util.math.MatrixStack;
 
-/** M3A CPU and material-context observer. It never acquires rendering ownership or suppresses Vanilla rendering. */
+/** M3B CPU and material-path observer. It never acquires rendering ownership or suppresses Vanilla rendering. */
 public final class PassThroughEntityRenderService {
     private static volatile PassThroughEntityRenderService instance;
 
@@ -62,6 +67,10 @@ public final class PassThroughEntityRenderService {
     private final ModelPartPoseInspector poseInspector = new ModelPartPoseInspector();
     private final ModelPartMaterialContextTracker<Object, RenderLayer, VertexConsumer> materialTracker =
             new ModelPartMaterialContextTracker<>();
+    private final MaterialPathCharacterizer<VertexConsumer> materialCharacterizer = new MaterialPathCharacterizer<>();
+    private final MaterialPathDiagnosticCache<VertexConsumer, Object, RenderLayer> materialDiagnosticCache =
+            new MaterialPathDiagnosticCache<>();
+    private final RenderThreadLifecycleDispatcher lifecycleDispatcher;
     private ModelPartInvocationSnapshot lastInvocation;
     private MaterialContextResolution<Object, RenderLayer> lastMaterialResolution;
     private int renderDepth;
@@ -73,9 +82,13 @@ public final class PassThroughEntityRenderService {
     private boolean unresolvedMaterialLogged;
     private boolean materialCapacityLogged;
     private boolean materialFailureLogged;
+    private boolean materialCharacterizationFailureLogged;
     private volatile boolean enabled = true;
 
-    private PassThroughEntityRenderService() {}
+    private PassThroughEntityRenderService() {
+        lifecycleDispatcher = new RenderThreadLifecycleDispatcher(
+                new MinecraftOwnerThreadScheduler(), () -> instance == this, this::applyLifecycleOperation);
+    }
 
     public static synchronized void initialize() {
         if (instance == null) instance = new PassThroughEntityRenderService();
@@ -83,7 +96,9 @@ public final class PassThroughEntityRenderService {
 
     public static void beginFrame() {
         PassThroughEntityRenderService current = instance;
-        if (current != null) current.resetFrameState();
+        if (current == null) return;
+        current.lifecycleDispatcher.drainPendingOnOwnerThread();
+        if (instance == current && current.enabled) current.resetFrameState();
     }
 
     public static void beginModelPartRender(
@@ -102,10 +117,11 @@ public final class PassThroughEntityRenderService {
      * Called only from return injections; the exact Vanilla objects are observed and returned control flow is
      * untouched.
      */
-    public static void observeMaterialProviderRequest(Object provider, RenderLayer layer, VertexConsumer consumer) {
+    public static void observeMaterialProviderRequest(
+            MaterialProviderSource source, Object provider, RenderLayer layer, VertexConsumer consumer) {
         PassThroughEntityRenderService current = instance;
         if (current == null || !current.enabled) return;
-        current.registerMaterialBinding(provider, layer, consumer);
+        current.registerMaterialBinding(source, provider, layer, consumer);
     }
 
     public static void endModelPartRender() {
@@ -115,25 +131,26 @@ public final class PassThroughEntityRenderService {
     }
 
     public static void invalidateWorld() {
-        PassThroughEntityRenderService current = instance;
-        if (current == null) return;
-        current.worldGeneration.incrementAndGet();
-        current.resetInspectionState();
+        requestLifecycleOperation(RenderThreadLifecycleDispatcher.Operation.WORLD);
     }
 
     public static void invalidateResources() {
-        PassThroughEntityRenderService current = instance;
-        if (current == null) return;
-        current.resourceGeneration.incrementAndGet();
-        current.resetInspectionState();
+        requestLifecycleOperation(RenderThreadLifecycleDispatcher.Operation.RESOURCES);
     }
 
     public static void shutdown() {
+        requestLifecycleOperation(RenderThreadLifecycleDispatcher.Operation.SHUTDOWN);
+    }
+
+    private static void requestLifecycleOperation(RenderThreadLifecycleDispatcher.Operation operation) {
         PassThroughEntityRenderService current = instance;
         if (current == null) return;
-        current.enabled = false;
-        current.resetInspectionState();
-        instance = null;
+        RenderThreadLifecycleDispatcher.RequestResult result = current.lifecycleDispatcher.request(operation);
+        if (result != RenderThreadLifecycleDispatcher.RequestResult.QUEUE_REJECTED) return;
+        ThreadiumClient.LOGGER.warn(
+                "Threadium could not enqueue Minecraft 1.21.1 {} lifecycle work; it will retry at the next render frame",
+                operation);
+        if (operation == RenderThreadLifecycleDispatcher.Operation.SHUTDOWN) current.abandonAfterRejectedShutdown();
     }
 
     public static Diagnostics diagnostics() {
@@ -141,6 +158,9 @@ public final class PassThroughEntityRenderService {
         ModelPartMaterialContextTracker.Diagnostics material = current == null
                 ? new ModelPartMaterialContextTracker<>().diagnostics()
                 : current.materialTracker.diagnostics();
+        MaterialPathCharacterizer.Diagnostics materialCharacterization = current == null
+                ? new MaterialPathCharacterizer<>().diagnostics()
+                : current.materialCharacterizer.diagnostics();
         return current == null
                 ? Diagnostics.disabled()
                 : new Diagnostics(
@@ -179,7 +199,8 @@ public final class PassThroughEntityRenderService {
                         current.retainedPoseBytesThisFrame.get(),
                         current.nonFinitePoseCaptures.get(),
                         current.rootTransformCaptures.get(),
-                        material);
+                        material,
+                        materialCharacterization);
     }
 
     private void captureInvocation(
@@ -198,7 +219,40 @@ public final class PassThroughEntityRenderService {
         if (mesh != null) capturePose(root, mesh, matrices, light, overlay, color);
     }
 
-    private void registerMaterialBinding(Object provider, RenderLayer layer, VertexConsumer consumer) {
+    private void applyLifecycleOperation(RenderThreadLifecycleDispatcher.Operation operation, long occurrences) {
+        requireLifecycleOwnerThread();
+        if (instance != this) return;
+        logMaterialSummary();
+        switch (operation) {
+            case WORLD -> worldGeneration.set(Math.addExact(worldGeneration.get(), occurrences));
+            case RESOURCES -> resourceGeneration.set(Math.addExact(resourceGeneration.get(), occurrences));
+            case SHUTDOWN -> enabled = false;
+        }
+        resetInspectionState();
+        if (operation == RenderThreadLifecycleDispatcher.Operation.SHUTDOWN) {
+            synchronized (PassThroughEntityRenderService.class) {
+                if (instance == this) instance = null;
+            }
+        }
+    }
+
+    private void abandonAfterRejectedShutdown() {
+        enabled = false;
+        synchronized (PassThroughEntityRenderService.class) {
+            if (instance == this) instance = null;
+        }
+        ThreadiumClient.LOGGER.warn(
+                "Threadium released its Minecraft 1.21.1 service without touching render-thread-owned state because the client executor was already stopping");
+    }
+
+    private void requireLifecycleOwnerThread() {
+        if (!lifecycleDispatcher.isOwnerThread()) {
+            throw new IllegalStateException("Threadium lifecycle state is not on the Minecraft client thread");
+        }
+    }
+
+    private void registerMaterialBinding(
+            MaterialProviderSource source, Object provider, RenderLayer layer, VertexConsumer consumer) {
         try {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client == null || !client.isOnThread() || !RenderSystem.isOnRenderThread()) {
@@ -207,7 +261,11 @@ public final class PassThroughEntityRenderService {
                 return;
             }
             ModelPartMaterialContextTracker.RegistrationResult result =
-                    materialTracker.register(provider, layer, consumer);
+                    materialTracker.register(provider, layer, consumer, source);
+            boolean crossProviderRebound =
+                    result != ModelPartMaterialContextTracker.RegistrationResult.CAPACITY_REJECTED
+                            && materialTracker.resolve(consumer).crossProviderRebound();
+            characterizeRegistration(source, provider, layer, consumer, result, crossProviderRebound);
             if (result == ModelPartMaterialContextTracker.RegistrationResult.CAPACITY_REJECTED) {
                 warnMaterialCapacityOnce();
             }
@@ -222,6 +280,7 @@ public final class PassThroughEntityRenderService {
         try {
             MaterialContextResolution<Object, RenderLayer> resolution = materialTracker.observeResolution(consumer);
             lastMaterialResolution = resolution;
+            characterizeResolution(consumer, resolution);
             if (resolution.status() == MaterialResolutionStatus.DIRECT_UNIQUE) {
                 if (!directMaterialLogged) {
                     directMaterialLogged = true;
@@ -232,7 +291,7 @@ public final class PassThroughEntityRenderService {
                 unresolvedMaterialLogged = true;
                 ThreadiumClient.LOGGER.info(
                         "Threadium observed an unresolved Minecraft 1.21.1 ModelPart VertexConsumer ({}); Vanilla pass-through remains active",
-                        resolution.unresolvedConsumerClass());
+                        materialDiagnosticCache.consumerClass(consumer, 256));
             } else if (resolution.status() == MaterialResolutionStatus.CAPACITY_REJECTED) {
                 warnMaterialCapacityOnce();
             }
@@ -240,6 +299,91 @@ public final class PassThroughEntityRenderService {
             materialTracker.recordTrackingFailure();
             warnMaterialFailureOnce("consumer resolution failed", exception);
         }
+    }
+
+    private void characterizeRegistration(
+            MaterialProviderSource source,
+            Object provider,
+            RenderLayer layer,
+            VertexConsumer consumer,
+            ModelPartMaterialContextTracker.RegistrationResult result,
+            boolean crossProviderRebound) {
+        try {
+            MaterialPathDiagnosticData data = materialDiagnosticCache.bindingDiagnostics(
+                    consumer, provider, layer, source, crossProviderRebound, 256);
+            materialCharacterizer.recordRegistration(
+                    consumer, data, result != ModelPartMaterialContextTracker.RegistrationResult.CAPACITY_REJECTED);
+        } catch (RuntimeException exception) {
+            materialCharacterizer.recordFailure();
+            warnMaterialCharacterizationFailureOnce("registration characterization failed", exception);
+        }
+    }
+
+    private void characterizeResolution(
+            VertexConsumer consumer, MaterialContextResolution<Object, RenderLayer> resolution) {
+        try {
+            if (resolution.directlyResolved()) {
+                MaterialPathDiagnosticData data = materialDiagnosticCache.bindingDiagnostics(
+                        consumer,
+                        resolution.provider(),
+                        resolution.layer(),
+                        resolution.providerSource(),
+                        resolution.crossProviderRebound(),
+                        256);
+                materialCharacterizer.recordResolution(consumer, resolution.status(), data);
+            } else {
+                materialCharacterizer.recordUnresolvedResolution(
+                        consumer, resolution.status(), materialDiagnosticCache.unresolvedDiagnostics(consumer, 256));
+            }
+        } catch (RuntimeException exception) {
+            materialCharacterizer.recordFailure();
+            warnMaterialCharacterizationFailureOnce("resolution characterization failed", exception);
+        }
+    }
+
+    private void logMaterialSummary() {
+        requireLifecycleOwnerThread();
+        try {
+            MaterialPathCharacterizer.LifecycleSummary summary = materialCharacterizer.lifecycleSummary();
+            if (!summary.hasEvents()) return;
+            ModelPartMaterialContextTracker.Diagnostics material = materialTracker.diagnostics();
+            MaterialPathCharacterizer.Diagnostics characterization = summary.diagnostics();
+            ThreadiumClient.LOGGER.info(
+                    "Threadium Minecraft 1.21.1 material-path summary: providerRequests={}, resolutions={}, directUnique={}, directRebound={}, unresolved={}, beforeFirstProvider={}, unresolvedThenRegistered={}, unresolvedNeverRegistered={}, pathOverflow={}; Vanilla pass-through remains active",
+                    material.materialProviderRequests(),
+                    material.materialResolutionAttempts(),
+                    material.materialDirectUniqueResolutions(),
+                    material.materialDirectReboundResolutions(),
+                    material.materialUnresolvedResolutions(),
+                    characterization.materialResolutionsBeforeAnyProvider(),
+                    characterization.materialUnresolvedThenRegistered(),
+                    characterization.materialUnresolvedNeverRegistered(),
+                    characterization.materialPathOverflowEvents());
+            for (MaterialPathCharacterizer.PathAggregate path : summary.paths()) {
+                ThreadiumClient.LOGGER.info(
+                        "Threadium material path: status={}, providerSource={}, providerClass={}, consumerClass={}, layerClass={}, layer={}, lateRegistration={}, beforeFirstProvider={}, crossProviderRebound={}, count={}",
+                        path.key().status(),
+                        path.key().providerSource(),
+                        path.key().providerClass(),
+                        path.key().consumerClass(),
+                        path.key().layerClass(),
+                        path.key().layerDescription(),
+                        path.key().lateRegistration(),
+                        path.key().resolutionBeforeFirstProvider(),
+                        path.key().crossProviderRebound(),
+                        path.count());
+            }
+        } catch (RuntimeException exception) {
+            materialCharacterizer.recordFailure();
+            warnMaterialCharacterizationFailureOnce("lifecycle summary failed", exception);
+        }
+    }
+
+    private void warnMaterialCharacterizationFailureOnce(String reason, RuntimeException exception) {
+        if (materialCharacterizationFailureLogged) return;
+        materialCharacterizationFailureLogged = true;
+        ThreadiumClient.LOGGER.warn(
+                "Threadium Minecraft 1.21.1 material-path {}; Vanilla pass-through remains active", reason, exception);
     }
 
     private void warnMaterialCapacityOnce() {
@@ -375,6 +519,7 @@ public final class PassThroughEntityRenderService {
     }
 
     private void resetInspectionState() {
+        requireLifecycleOwnerThread();
         observedModelPartRenders.set(0);
         structureInspections.set(0);
         structureCacheHits.set(0);
@@ -410,6 +555,8 @@ public final class PassThroughEntityRenderService {
         structureInspector.clear();
         poseInspector.clear();
         materialTracker.clearLifecycle();
+        materialCharacterizer.clearLifecycle();
+        materialDiagnosticCache.clearLifecycle();
         lastInvocation = null;
         lastMaterialResolution = null;
         renderDepth = 0;
@@ -421,12 +568,21 @@ public final class PassThroughEntityRenderService {
         unresolvedMaterialLogged = false;
         materialCapacityLogged = false;
         materialFailureLogged = false;
+        materialCharacterizationFailureLogged = false;
     }
 
     private void resetFrameState() {
+        requireLifecycleOwnerThread();
         renderDepth = 0;
         poseInspector.beginFrame();
+        try {
+            materialCharacterizer.beginFrame();
+        } catch (RuntimeException exception) {
+            materialCharacterizer.recordFailure();
+            warnMaterialCharacterizationFailureOnce("frame reset failed", exception);
+        }
         materialTracker.beginFrame();
+        materialDiagnosticCache.beginFrame();
         lastInvocation = null;
         lastMaterialResolution = null;
         uniquePosesThisFrame.set(0);
@@ -469,13 +625,74 @@ public final class PassThroughEntityRenderService {
             long retainedPoseBytesThisFrame,
             long nonFinitePoseCaptures,
             long rootTransformCaptures,
-            ModelPartMaterialContextTracker.Diagnostics material) {
+            ModelPartMaterialContextTracker.Diagnostics material,
+            MaterialPathCharacterizer.Diagnostics materialCharacterization) {
         private static Diagnostics disabled() {
             ModelPartMaterialContextTracker.Diagnostics material =
                     new ModelPartMaterialContextTracker<>().diagnostics();
+            MaterialPathCharacterizer.Diagnostics materialCharacterization =
+                    new MaterialPathCharacterizer<>().diagnostics();
             return new Diagnostics(
-                    false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, material);
+                    false,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    material,
+                    materialCharacterization);
+        }
+    }
+
+    private static final class MinecraftOwnerThreadScheduler
+            implements RenderThreadLifecycleDispatcher.OwnerThreadScheduler {
+        @Override
+        public boolean isOwnerThread() {
+            MinecraftClient client = MinecraftClient.getInstance();
+            return client != null && client.isOnThread() && RenderSystem.isOnRenderThread();
+        }
+
+        @Override
+        public boolean execute(Runnable action) {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client == null || !client.isRunning()) return false;
+            try {
+                client.execute(action);
+                return true;
+            } catch (RuntimeException exception) {
+                ThreadiumClient.LOGGER.warn(
+                        "Threadium could not submit Minecraft 1.21.1 lifecycle work to the client executor", exception);
+                return false;
+            }
         }
     }
 }

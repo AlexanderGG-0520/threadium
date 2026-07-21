@@ -2,6 +2,7 @@ package dev.alex.threadium.render.modelpart.material;
 
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
@@ -18,6 +19,7 @@ public final class ModelPartMaterialContextTracker<P, L, C> {
     private final IdentityHashMap<P, Boolean> providers = new IdentityHashMap<>();
     private final IdentityHashMap<L, Boolean> layers = new IdentityHashMap<>();
     private final LinkedHashSet<String> unresolvedConsumerClasses = new LinkedHashSet<>();
+    private final LinkedHashMap<String, String> normalizedConsumerClasses = new LinkedHashMap<>();
 
     private long frameGeneration;
     private long registrationSequence;
@@ -43,14 +45,20 @@ public final class ModelPartMaterialContextTracker<P, L, C> {
     }
 
     public RegistrationResult register(P provider, L layer, C consumer) {
+        return register(provider, layer, consumer, MaterialProviderSource.UNAVAILABLE);
+    }
+
+    public RegistrationResult register(P provider, L layer, C consumer, MaterialProviderSource providerSource) {
         Objects.requireNonNull(provider, "provider");
         Objects.requireNonNull(layer, "layer");
         Objects.requireNonNull(consumer, "consumer");
+        Objects.requireNonNull(providerSource, "providerSource");
         materialProviderRequests++;
 
         Binding<P, L> existing = bindings.get(consumer);
         if (existing != null && existing.provider == provider && existing.layer == layer) {
             existing.sequence = ++registrationSequence;
+            existing.providerSource = providerSource;
             materialRegistrationRefreshes++;
             return RegistrationResult.REFRESHED;
         }
@@ -64,9 +72,10 @@ public final class ModelPartMaterialContextTracker<P, L, C> {
             capacityExhausted = true;
             materialCapacityRejections++;
             if (existing != null) {
-                if (existing.provider != provider) materialCrossProviderRebindings++;
+                boolean crossProvider = existing.provider != provider;
+                if (crossProvider) materialCrossProviderRebindings++;
                 materialConsumerRebindings++;
-                existing.markRebound();
+                existing.markRebound(crossProvider);
             }
             return RegistrationResult.CAPACITY_REJECTED;
         }
@@ -75,14 +84,14 @@ public final class ModelPartMaterialContextTracker<P, L, C> {
         if (newLayer) layers.put(layer, Boolean.TRUE);
         long sequence = ++registrationSequence;
         if (existing == null) {
-            bindings.put(consumer, new Binding<>(provider, layer, sequence));
+            bindings.put(consumer, new Binding<>(provider, layer, providerSource, sequence));
             materialConsumerRegistrations++;
             return RegistrationResult.REGISTERED;
         }
 
         if (existing.provider != provider) materialCrossProviderRebindings++;
         materialConsumerRebindings++;
-        existing.rebind(provider, layer, sequence);
+        existing.rebind(provider, layer, providerSource, sequence);
         return RegistrationResult.REBOUND;
     }
 
@@ -96,16 +105,25 @@ public final class ModelPartMaterialContextTracker<P, L, C> {
                     : MaterialResolutionStatus.UNRESOLVED;
             return new MaterialContextResolution<>(
                     status,
+                    MaterialProviderSource.UNAVAILABLE,
                     null,
                     null,
                     frameGeneration,
                     0,
-                    boundedClassName(consumer.getClass(), limits.diagnosticTextLength()));
+                    false,
+                    consumer.getClass().getName());
         }
         MaterialResolutionStatus status =
                 binding.rebound ? MaterialResolutionStatus.DIRECT_REBOUND : MaterialResolutionStatus.DIRECT_UNIQUE;
         return new MaterialContextResolution<>(
-                status, binding.provider, binding.layer, frameGeneration, binding.sequence, null);
+                status,
+                binding.providerSource,
+                binding.provider,
+                binding.layer,
+                frameGeneration,
+                binding.sequence,
+                binding.crossProviderRebound,
+                null);
     }
 
     /** Records aggregate diagnostics for a lookup without retaining an unresolved consumer identity. */
@@ -175,9 +193,16 @@ public final class ModelPartMaterialContextTracker<P, L, C> {
     }
 
     private void retainUnresolvedClass(String className) {
+        String normalized = normalizedConsumerClasses.get(className);
+        if (normalized == null) {
+            normalized = boundedClassName(className, limits.diagnosticTextLength());
+            if (normalizedConsumerClasses.size() < limits.maximumUnresolvedClassNames()) {
+                normalizedConsumerClasses.put(className, normalized);
+            }
+        }
         if (unresolvedConsumerClasses.size() < limits.maximumUnresolvedClassNames()
-                || unresolvedConsumerClasses.contains(className)) {
-            unresolvedConsumerClasses.add(className);
+                || unresolvedConsumerClasses.contains(normalized)) {
+            unresolvedConsumerClasses.add(normalized);
         }
     }
 
@@ -186,18 +211,21 @@ public final class ModelPartMaterialContextTracker<P, L, C> {
         providers.clear();
         layers.clear();
         unresolvedConsumerClasses.clear();
+        normalizedConsumerClasses.clear();
         registrationSequence = 0;
         capacityExhausted = false;
     }
 
     static String boundedClassName(Class<?> type, int maximumLength) {
-        return sanitizeDiagnosticText(type.getName(), maximumLength);
+        return boundedClassName(type.getName(), maximumLength);
+    }
+
+    private static String boundedClassName(String name, int maximumLength) {
+        return MaterialDiagnosticText.sanitize(name, maximumLength);
     }
 
     static String sanitizeDiagnosticText(String text, int maximumLength) {
-        String sanitized =
-                Objects.requireNonNull(text, "text").replace('\n', ' ').replace('\r', ' ');
-        return sanitized.length() <= maximumLength ? sanitized : sanitized.substring(0, maximumLength);
+        return MaterialDiagnosticText.sanitize(text, maximumLength);
     }
 
     public enum RegistrationResult {
@@ -251,24 +279,30 @@ public final class ModelPartMaterialContextTracker<P, L, C> {
     private static final class Binding<P, L> {
         private P provider;
         private L layer;
+        private MaterialProviderSource providerSource;
         private long sequence;
         private boolean rebound;
+        private boolean crossProviderRebound;
 
-        private Binding(P provider, L layer, long sequence) {
+        private Binding(P provider, L layer, MaterialProviderSource providerSource, long sequence) {
             this.provider = provider;
             this.layer = layer;
+            this.providerSource = providerSource;
             this.sequence = sequence;
         }
 
-        private void rebind(P nextProvider, L nextLayer, long nextSequence) {
+        private void rebind(P nextProvider, L nextLayer, MaterialProviderSource nextProviderSource, long nextSequence) {
+            if (provider != nextProvider) crossProviderRebound = true;
             rebound = true;
             provider = nextProvider;
             layer = nextLayer;
+            providerSource = nextProviderSource;
             sequence = nextSequence;
         }
 
-        private void markRebound() {
+        private void markRebound(boolean crossProvider) {
             rebound = true;
+            crossProviderRebound |= crossProvider;
         }
     }
 }
