@@ -54,3 +54,15 @@ jobs:
         with:
           name: immediatelyfast-inspection
           path: inspection
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta7-source-snapshot
+          include-hidden-files: true
+          path: |
+            .github
+            src
+            build.gradle
+            gradle.properties
+            settings.gradle
