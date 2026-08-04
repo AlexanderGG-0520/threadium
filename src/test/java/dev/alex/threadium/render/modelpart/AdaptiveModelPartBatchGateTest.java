@@ -91,8 +91,9 @@ class AdaptiveModelPartBatchGateTest {
         AdaptiveModelPartBatchGate gate = primedGate(16);
         Object owner = OWNER;
 
-        gate.recordFlush(owner, new ModelPartGpuBackend.FlushStats(
-                16, 16, 16, 16, 0, 0, 16, 0, 1, 0, 1, 1, 16L * 96L, 16L * 112L));
+        gate.recordFlush(
+                owner,
+                new ModelPartGpuBackend.FlushStats(16, 16, 16, 16, 0, 0, 16, 0, 1, 0, 1, 1, 16L * 96L, 16L * 112L));
         assertEquals(AdaptiveModelPartBatchGate.UNPROFITABLE_COOLDOWN_FRAMES, gate.cooldownFrames(owner));
 
         gate.beginFrame();
@@ -105,8 +106,9 @@ class AdaptiveModelPartBatchGateTest {
     @Test
     void efficientFlushDoesNotBlockNextStableFrame() {
         AdaptiveModelPartBatchGate gate = primedGate(16);
-        gate.recordFlush(OWNER, new ModelPartGpuBackend.FlushStats(
-                16, 1, 16, 1, 0, 0, 0, 1, 16, 16, 1, 1, 16L * 96L, 16L * 112L));
+        gate.recordFlush(
+                OWNER,
+                new ModelPartGpuBackend.FlushStats(16, 1, 16, 1, 0, 0, 0, 1, 16, 16, 1, 1, 16L * 96L, 16L * 112L));
         assertEquals(0, gate.cooldownFrames(OWNER));
 
         gate.beginFrame();
