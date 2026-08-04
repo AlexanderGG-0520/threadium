@@ -11,8 +11,10 @@ public final class GenericModelPartPoseExtractor {
 
     public ModelPartBoneData extract(GenericModelPartTopology topology) {
         int boneCount = topology.nodes().size();
-        return extract(topology, new ModelPartBoneData(
-                new float[Math.multiplyExact(boneCount, FLOATS_PER_BONE)], new long[(boneCount + 63) >>> 6]));
+        return extract(
+                topology,
+                new ModelPartBoneData(
+                        new float[Math.multiplyExact(boneCount, FLOATS_PER_BONE)], new long[(boneCount + 63) >>> 6]));
     }
 
     ModelPartBoneData extract(GenericModelPartTopology topology, FrameBoneDataArena arena) {
