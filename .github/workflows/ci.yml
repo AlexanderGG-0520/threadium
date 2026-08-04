@@ -32,5 +32,13 @@ jobs:
       - name: Apply Java formatting
         run: gradle --no-daemon spotlessApply
 
-      - name: Show required formatting patch
+      - name: Upload formatted sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: formatted-sources
+          path: |
+            src/client/java/dev/alex/threadium
+            src/test/java/dev/alex/threadium
+
+      - name: Verify formatting is committed
         run: git diff --exit-code
