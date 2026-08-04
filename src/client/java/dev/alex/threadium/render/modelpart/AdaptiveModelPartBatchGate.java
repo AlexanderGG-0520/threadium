@@ -1,60 +1,96 @@
 package dev.alex.threadium.render.modelpart;
 
 import java.util.Arrays;
+import java.util.IdentityHashMap;
 
 /**
  * Frame-delayed exact-identity profitability predictor.
  *
- * <p>The current frame is observed only. A candidate becomes eligible in the next frame when the same render group,
- * renderer-owned model root, and RenderType reached the configured minimum. This keeps the replacement decision ahead
- * of topology lookup, pose extraction, buffer packing, and GPU upload without allocating a key per invocation.
+ * <p>The current frame is observed only. A candidate becomes eligible in the next frame when the same stable feature
+ * renderer, renderer-owned model root, and RenderType reached the configured minimum. Actual flush efficiency feeds a
+ * short cooldown: groups that produced mostly singleton draws temporarily return to vanilla instead of repeatedly
+ * paying pose packing, upload, and render-pass overhead without reducing draw calls.
  */
 final class AdaptiveModelPartBatchGate {
+    static final int UNPROFITABLE_COOLDOWN_FRAMES = 30;
+
     private Table previous = new Table();
     private Table current = new Table();
-    private int nextGroupOrdinal;
+    private final IdentityHashMap<Object, GroupFeedback> feedback = new IdentityHashMap<>();
 
     void beginFrame() {
         Table swap = previous;
         previous = current;
         current = swap;
         current.clear();
-        nextGroupOrdinal = 0;
+        for (GroupFeedback state : feedback.values()) state.beginFrame();
     }
 
-    int nextGroupOrdinal() {
-        return nextGroupOrdinal++;
+    boolean observeAndShouldReplace(Object groupOwner, Object modelRoot, Object type, int minimumInstances) {
+        if (groupOwner == null || modelRoot == null || type == null) return false;
+        current.increment(groupOwner, modelRoot, type);
+        if (minimumInstances <= 1) return true;
+        GroupFeedback state = feedback.get(groupOwner);
+        return (state == null || state.cooldownFrames == 0)
+                && previous.count(groupOwner, modelRoot, type) >= minimumInstances;
     }
 
-    boolean observeAndShouldReplace(int groupOrdinal, Object modelRoot, Object type, int minimumInstances) {
-        current.increment(groupOrdinal, modelRoot, type);
-        return minimumInstances <= 1 || previous.count(groupOrdinal, modelRoot, type) >= minimumInstances;
+    void recordFlush(Object groupOwner, ModelPartGpuBackend.FlushStats stats) {
+        if (groupOwner == null || stats == null || stats.instances() <= 0) return;
+        int instances = stats.batchableInstances();
+        int draws = stats.batchableDrawCalls();
+        if (instances <= 0) return;
+
+        boolean averageBatchAtLeastTwo = draws > 0 && (long) draws * 2L <= instances;
+        boolean majorityCoveredByMultiDraws =
+                (long) stats.totalInstancesInMultiDraws() * 2L >= instances;
+        boolean profitable = averageBatchAtLeastTwo && majorityCoveredByMultiDraws;
+
+        GroupFeedback state = feedback.computeIfAbsent(groupOwner, ignored -> new GroupFeedback());
+        if (profitable) {
+            state.cooldownFrames = 0;
+        } else {
+            state.cooldownFrames = UNPROFITABLE_COOLDOWN_FRAMES;
+        }
     }
 
     void clear() {
         previous.clear();
         current.clear();
-        nextGroupOrdinal = 0;
+        feedback.clear();
+    }
+
+    int cooldownFrames(Object groupOwner) {
+        GroupFeedback state = feedback.get(groupOwner);
+        return state == null ? 0 : state.cooldownFrames;
+    }
+
+    private static final class GroupFeedback {
+        private int cooldownFrames;
+
+        private void beginFrame() {
+            if (cooldownFrames > 0) cooldownFrames--;
+        }
     }
 
     private static final class Table {
         private static final int INITIAL_CAPACITY = 32;
 
-        private int[] groups = new int[INITIAL_CAPACITY];
+        private Object[] groups = new Object[INITIAL_CAPACITY];
         private Object[] roots = new Object[INITIAL_CAPACITY];
         private Object[] types = new Object[INITIAL_CAPACITY];
         private int[] counts = new int[INITIAL_CAPACITY];
         private int size;
 
-        int count(int group, Object root, Object type) {
+        int count(Object group, Object root, Object type) {
             int slot = find(group, root, type);
-            return roots[slot] == null ? 0 : counts[slot];
+            return groups[slot] == null ? 0 : counts[slot];
         }
 
-        void increment(int group, Object root, Object type) {
-            if ((size + 1) * 2 > roots.length) grow();
+        void increment(Object group, Object root, Object type) {
+            if ((size + 1) * 2 > groups.length) grow();
             int slot = find(group, root, type);
-            if (roots[slot] == null) {
+            if (groups[slot] == null) {
                 groups[slot] = group;
                 roots[slot] = root;
                 types[slot] = type;
@@ -66,40 +102,42 @@ final class AdaptiveModelPartBatchGate {
         }
 
         void clear() {
+            Arrays.fill(groups, null);
             Arrays.fill(roots, null);
             Arrays.fill(types, null);
             size = 0;
         }
 
-        private int find(int group, Object root, Object type) {
-            int mask = roots.length - 1;
+        private int find(Object group, Object root, Object type) {
+            int mask = groups.length - 1;
             int slot = mix(group, root, type) & mask;
-            while (roots[slot] != null && (groups[slot] != group || roots[slot] != root || types[slot] != type)) {
+            while (groups[slot] != null
+                    && (groups[slot] != group || roots[slot] != root || types[slot] != type)) {
                 slot = (slot + 1) & mask;
             }
             return slot;
         }
 
         private void grow() {
-            int[] oldGroups = groups;
+            Object[] oldGroups = groups;
             Object[] oldRoots = roots;
             Object[] oldTypes = types;
             int[] oldCounts = counts;
 
-            int capacity = Math.multiplyExact(roots.length, 2);
-            groups = new int[capacity];
+            int capacity = Math.multiplyExact(groups.length, 2);
+            groups = new Object[capacity];
             roots = new Object[capacity];
             types = new Object[capacity];
             counts = new int[capacity];
             int oldSize = size;
             size = 0;
 
-            for (int i = 0; i < oldRoots.length; i++) {
-                Object root = oldRoots[i];
-                if (root == null) continue;
-                int slot = find(oldGroups[i], root, oldTypes[i]);
-                groups[slot] = oldGroups[i];
-                roots[slot] = root;
+            for (int i = 0; i < oldGroups.length; i++) {
+                Object group = oldGroups[i];
+                if (group == null) continue;
+                int slot = find(group, oldRoots[i], oldTypes[i]);
+                groups[slot] = group;
+                roots[slot] = oldRoots[i];
                 types[slot] = oldTypes[i];
                 counts[slot] = oldCounts[i];
                 size++;
@@ -110,8 +148,8 @@ final class AdaptiveModelPartBatchGate {
             }
         }
 
-        private static int mix(int group, Object root, Object type) {
-            int hash = group;
+        private static int mix(Object group, Object root, Object type) {
+            int hash = System.identityHashCode(group);
             hash = 31 * hash + System.identityHashCode(root);
             hash = 31 * hash + System.identityHashCode(type);
             hash ^= hash >>> 16;
