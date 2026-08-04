@@ -31,14 +31,15 @@ jobs:
         with:
           gradle-version: "9.6.1"
 
-      - name: Apply implementation patch
+      - name: Install implementation sources
         shell: bash
         run: |
           set -euo pipefail
-          cat .github/beta7-patch/part-*.b64 | base64 --decode > /tmp/beta7.patch
-          patch --batch --forward -p1 < /tmp/beta7.patch
+          cat .github/beta7-bundle/part-*.b64 | base64 --decode > /tmp/beta7-files.tar.gz
+          echo 'c59c77c06cccc1904407e2b490c6fa6ce110e9c86da7865b74bba53cf738ae80  /tmp/beta7-files.tar.gz' | sha256sum --check
+          tar -xzf /tmp/beta7-files.tar.gz -C .
           gradle --no-daemon spotlessApply
-          rm -rf .github/beta7-patch .github/workflows/inspect-immediatelyfast.yml
+          rm -rf .github/beta7-bundle .github/beta7-patch .github/workflows/inspect-immediatelyfast.yml
 
       - name: Commit implementation
         shell: bash
