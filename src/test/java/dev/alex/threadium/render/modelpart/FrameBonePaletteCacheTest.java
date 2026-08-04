@@ -126,7 +126,7 @@ class FrameBonePaletteCacheTest {
     }
 
     @Test
-    void newFrameReprobesAndRecoversImmediateReuse() {
+    void newFrameReprobesButStopsWhenUniquePosesDominate() {
         Fixture fixture = fixture();
         for (int i = 0; i < 256; i++) {
             fixture.part.x = i;
@@ -142,12 +142,17 @@ class FrameBonePaletteCacheTest {
         assertSame(shared, fixture.cache.find(fixture.topology));
         assertTrue(fixture.cache.lastLookupPerformed());
 
+        int lookups = 0;
+        int directPacked = 0;
         for (int i = 0; i < 256; i++) {
             fixture.part.x = 1000 + i;
             assertNull(fixture.cache.find(fixture.topology));
-            assertTrue(fixture.cache.lastLookupPerformed());
-            assertTrue(fixture.cache.store(palette(i)));
+            if (fixture.cache.lastLookupPerformed()) lookups++;
+            if (!fixture.cache.store(palette(i))) directPacked++;
         }
+        assertEquals(FrameBonePaletteCache.MISS_PROBE_LIMIT - 1, lookups);
+        assertEquals(256 - (FrameBonePaletteCache.MISS_PROBE_LIMIT - 2), directPacked);
+        assertEquals(FrameBonePaletteCache.MISS_PROBE_LIMIT - 1, fixture.cache.size());
     }
 
     @Test
