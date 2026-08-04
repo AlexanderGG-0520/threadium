@@ -44,6 +44,15 @@ jobs:
         with:
           ref: fix/beta7-runtime-validation
 
+      - name: Mark automation start
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "Start beta.7 runtime fix CI"
+          git push origin HEAD:fix/beta7-runtime-validation
+
       - name: Set up Java 25
         uses: actions/setup-java@v4
         with:
