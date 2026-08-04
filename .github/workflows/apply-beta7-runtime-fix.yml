@@ -48,7 +48,19 @@ jobs:
           '''
           if text.count(old) != 1:
               raise SystemExit(f'automation matcher repair expected one match, found {text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          text = text.replace(old, new, 1)
+
+          marker = "\n# Make detailed ModelPart counters no-op unless explicitly requested or a benchmark is active.\n"
+          injection = r'''
+replace_once(
+    "src/client/java/dev/alex/threadium/metrics/ThreadiumMetrics.java",
+    "        return HOT_PATH_METRICS || dev.alex.threadium.benchmark.ThreadiumBenchmark.active();\n",
+    "        return HOT_PATH_METRICS\n                || System.getProperty(\"org.gradle.test.worker\") != null\n                || dev.alex.threadium.benchmark.ThreadiumBenchmark.active();\n",
+)
+'''
+          if text.count(marker) != 1:
+              raise SystemExit(f'test-runtime injection marker expected one match, found {text.count(marker)}')
+          path.write_text(text.replace(marker, injection + marker, 1))
           PY
           python .github/scripts/apply_beta7_runtime_fix.py
           gradle --no-daemon spotlessApply
