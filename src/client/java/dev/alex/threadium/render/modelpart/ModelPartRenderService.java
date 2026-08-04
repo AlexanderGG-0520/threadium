@@ -1,10 +1,10 @@
 package dev.alex.threadium.render.modelpart;
 
-import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.alex.threadium.ThreadiumClient;
 import dev.alex.threadium.benchmark.BoundedFallbackDiagnostics;
+import dev.alex.threadium.compat.ImmediatelyFastCompatibility;
 import dev.alex.threadium.compat.IrisCompatibility;
 import dev.alex.threadium.config.ThreadiumConfig;
 import dev.alex.threadium.config.ThreadiumRuntimeConfig;
@@ -56,6 +56,7 @@ public final class ModelPartRenderService {
                         && !debugMode.overlayOnly(),
                 metrics);
         cache = new ModelPartMeshCache(c.gpuMaxCachedMeshes(), c.gpuMaxMeshBytes());
+        ImmediatelyFastCompatibility.logStatus();
         if (debugMode.overlayOnly())
             ThreadiumClient.LOGGER.info(
                     "GPU ModelPart diagnostic mode: {}, overlayOnly=true, debugSuppressVanilla={}, productionReplacementEnabled=false, vanillaSuppressionAllowed=false",
@@ -199,8 +200,8 @@ public final class ModelPartRenderService {
             metrics.interceptionPassThroughs.increment();
             return ModelPartInterceptionResult.PASS_THROUGH;
         }
-        if (!(consumer instanceof BufferBuilder) && sprite == null && sheetedDecalPose == null) {
-            recordFallback("unsupported wrapped vertex consumer", model, type, null);
+        if (!ImmediatelyFastCompatibility.accepts(consumer) && sprite == null && sheetedDecalPose == null) {
+            recordFallback(ImmediatelyFastCompatibility.fallbackReason(consumer), model, type, null);
             metrics.materialFallbacks.increment();
             metrics.vanillaFallbacks.increment();
             metrics.interceptionPassThroughs.increment();
