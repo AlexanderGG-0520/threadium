@@ -75,7 +75,7 @@ public final class ThreadiumMetrics {
 
     private static void record(int metric, long nanos) {
         ThreadiumMetrics metrics = current;
-        if (metrics == null || !hotPathMetricsEnabled() || !metrics.runtimeConfig.metricsEnabled()) return;
+        if (metrics == null || !metrics.runtimeConfig.metricsEnabled()) return;
         switch (metric) {
             case 0 -> metrics.worldRender.record(nanos);
             case 1 -> metrics.entityExtraction.record(nanos);
