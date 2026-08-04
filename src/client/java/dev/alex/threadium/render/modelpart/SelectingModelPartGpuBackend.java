@@ -214,7 +214,8 @@ public final class SelectingModelPartGpuBackend implements ModelPartGpuBackend {
         metrics.boneUploadCalls.add(stats.boneUploadCalls());
         metrics.instanceBytesUploaded.add(stats.instanceBytes());
         metrics.boneBytesUploaded.add(stats.boneBytes());
-        metrics.maximumInstancesPerDraw.accumulateAndGet(stats.maximumInstancesPerDraw(), Math::max);
+        if (ModelPartGpuMetrics.detailedMetricsEnabled())
+            metrics.maximumInstancesPerDraw.accumulateAndGet(stats.maximumInstancesPerDraw(), Math::max);
         if (state() == ModelPartBackendState.READY && delegate.state() == ModelPartBackendState.ACTIVE) {
             states.transition(ModelPartBackendState.READY, ModelPartBackendState.ACTIVE);
             ThreadiumClient.LOGGER.info("GPU ModelPart backend ACTIVE");

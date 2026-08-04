@@ -642,16 +642,21 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
             int calls = 0, batchableInstances = 0, batchableCalls = 0, sortedInstances = 0, sortedCalls = 0;
             int singletons = 0, multi = 0, maximum = 0, multiInstances = 0;
             long drawSubmissionStart = profileStart();
-            for (int planIndex = 0; planIndex < planCount; planIndex++) {
+            int planIndex = 0;
+            while (planIndex < planCount) {
                 PlannedDraw plan = plannedDraws.get(planIndex);
                 if (plan.sorted) {
                     int planSortedCalls = submitSorted(encoder, plan, uploadedInstances, packedIndexBySource);
                     calls += planSortedCalls;
                     sortedInstances += plan.sourceCount;
                     sortedCalls += planSortedCalls;
-                } else {
-                    InstanceSubmissionOrderPlanner.Plan submission = plan.submission;
-                    submitBatches(encoder, plan, uploadedInstances);
+                    planIndex++;
+                    continue;
+                }
+                int runEnd = compatibleUnsortedRunEnd(planIndex, planCount);
+                submitBatchRun(encoder, planIndex, runEnd, uploadedInstances);
+                for (int runIndex = planIndex; runIndex < runEnd; runIndex++) {
+                    InstanceSubmissionOrderPlanner.Plan submission = plannedDraws.get(runIndex).submission;
                     for (int batch = 0; batch < submission.batchCount(); batch++) {
                         int count = submission.instanceCounts()[batch];
                         calls++;
@@ -665,6 +670,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                         }
                     }
                 }
+                planIndex = runEnd;
             }
             drawSubmissionNanos = profileElapsed(drawSubmissionStart);
             queued.removePrefix(entryCount);
@@ -909,10 +915,51 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
         }
     }
 
-    private void submitBatches(
-            com.mojang.blaze3d.systems.CommandEncoder encoder, PlannedDraw plan, GpuBufferSlice uploadedInstances) {
-        PreparedRenderType prepared = plan.prepared;
-        RenderTarget target = prepared.outputTarget().getRenderTarget();
+    private int compatibleUnsortedRunEnd(int start, int planCount) {
+        PlannedDraw first = plannedDraws.get(start);
+        RenderTarget firstTarget = first.prepared.outputTarget().getRenderTarget();
+        Object color = colorAttachment(firstTarget);
+        Object depth = depthAttachment(firstTarget);
+        Object scissor = first.prepared.scissorState();
+        int end = start + 1;
+        while (end < planCount) {
+            PlannedDraw next = plannedDraws.get(end);
+            if (next.sorted) break;
+            RenderTarget nextTarget = next.prepared.outputTarget().getRenderTarget();
+            if (!compatiblePassState(
+                    color,
+                    depth,
+                    scissor,
+                    colorAttachment(nextTarget),
+                    depthAttachment(nextTarget),
+                    next.prepared.scissorState())) break;
+            end++;
+        }
+        return end;
+    }
+
+    static boolean compatiblePassState(
+            Object color, Object depth, Object scissor, Object nextColor, Object nextDepth, Object nextScissor) {
+        return color == nextColor && depth == nextDepth && scissor.equals(nextScissor);
+    }
+
+    private static Object colorAttachment(RenderTarget target) {
+        return RenderSystem.outputColorTextureOverride != null
+                ? RenderSystem.outputColorTextureOverride
+                : target.getColorTextureView();
+    }
+
+    private static Object depthAttachment(RenderTarget target) {
+        if (!target.useDepth) return null;
+        return RenderSystem.outputDepthTextureOverride != null
+                ? RenderSystem.outputDepthTextureOverride
+                : target.getDepthTextureView();
+    }
+
+    private void submitBatchRun(
+            com.mojang.blaze3d.systems.CommandEncoder encoder, int start, int end, GpuBufferSlice uploadedInstances) {
+        PlannedDraw first = plannedDraws.get(start);
+        RenderTarget target = first.prepared.outputTarget().getRenderTarget();
         var color = RenderSystem.outputColorTextureOverride != null
                 ? RenderSystem.outputColorTextureOverride
                 : target.getColorTextureView();
@@ -921,25 +968,32 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                         ? RenderSystem.outputDepthTextureOverride
                         : target.getDepthTextureView())
                 : null;
-        try (RenderPass pass = encoder.createRenderPass(plan, color, Optional.empty(), depth, OptionalDouble.empty())) {
+        try (RenderPass pass =
+                encoder.createRenderPass(first, color, Optional.empty(), depth, OptionalDouble.empty())) {
             metrics.blaze3dPassesCreated.increment();
-            bindPreparedPass(pass, prepared);
-            ModelPartPipelineDescriptor descriptor = ModelPartPipelineDescriptor.from(prepared.pipeline());
-            InstanceSubmissionOrderPlanner.Plan submission = plan.submission;
-            for (int batch = 0; batch < submission.batchCount(); batch++) {
-                int sourceIndex = submission.representativeSourceIndices()[batch];
-                int firstPackedInstance = submission.firstPackedInstances()[batch];
-                int count = submission.instanceCounts()[batch];
-                MeshHandle handle = queued.mesh(sourceIndex);
-                Mesh mesh = meshes.get(handle);
-                pass.setVertexBuffer(0, mesh.vertices.slice());
-                pass.setVertexBuffer(1, instanceSlice(uploadedInstances, firstPackedInstance, count));
-                pass.setIndexBuffer(mesh.indices, IndexType.INT);
-                pass.drawIndexed(handle.indexCount(), count, 0, 0, 0);
-                metrics.pipelineDraw(descriptor, count);
-                metrics.blaze3dDrawCommands.increment();
-                metrics.blaze3dInstancesSubmitted.add(count);
-            }
+            for (int planIndex = start; planIndex < end; planIndex++)
+                submitBatches(pass, plannedDraws.get(planIndex), uploadedInstances);
+        }
+    }
+
+    private void submitBatches(RenderPass pass, PlannedDraw plan, GpuBufferSlice uploadedInstances) {
+        PreparedRenderType prepared = plan.prepared;
+        bindPreparedPass(pass, prepared);
+        ModelPartPipelineDescriptor descriptor = ModelPartPipelineDescriptor.from(prepared.pipeline());
+        InstanceSubmissionOrderPlanner.Plan submission = plan.submission;
+        for (int batch = 0; batch < submission.batchCount(); batch++) {
+            int sourceIndex = submission.representativeSourceIndices()[batch];
+            int firstPackedInstance = submission.firstPackedInstances()[batch];
+            int count = submission.instanceCounts()[batch];
+            MeshHandle handle = queued.mesh(sourceIndex);
+            Mesh mesh = meshes.get(handle);
+            pass.setVertexBuffer(0, mesh.vertices.slice());
+            pass.setVertexBuffer(1, instanceSlice(uploadedInstances, firstPackedInstance, count));
+            pass.setIndexBuffer(mesh.indices, IndexType.INT);
+            pass.drawIndexed(handle.indexCount(), count, 0, 0, 0);
+            metrics.pipelineDraw(descriptor, count);
+            metrics.blaze3dDrawCommands.increment();
+            metrics.blaze3dInstancesSubmitted.add(count);
         }
     }
 
