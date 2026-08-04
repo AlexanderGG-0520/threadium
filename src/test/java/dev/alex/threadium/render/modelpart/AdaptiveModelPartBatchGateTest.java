@@ -124,6 +124,9 @@ class AdaptiveModelPartBatchGateTest {
         gate.beginFrame();
         for (int i = 0; i < count; i++) gate.observeAndShouldReplace(OWNER, ROOT, TYPE, count);
         gate.beginFrame();
+        for (int i = 0; i < count; i++) {
+            assertTrue(gate.observeAndShouldReplace(OWNER, ROOT, TYPE, count));
+        }
         return gate;
     }
 }
