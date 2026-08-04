@@ -42,8 +42,7 @@ final class AdaptiveModelPartBatchGate {
         if (instances <= 0) return;
 
         boolean averageBatchAtLeastTwo = draws > 0 && (long) draws * 2L <= instances;
-        boolean majorityCoveredByMultiDraws =
-                (long) stats.totalInstancesInMultiDraws() * 2L >= instances;
+        boolean majorityCoveredByMultiDraws = (long) stats.totalInstancesInMultiDraws() * 2L >= instances;
         boolean profitable = averageBatchAtLeastTwo && majorityCoveredByMultiDraws;
 
         GroupFeedback state = feedback.computeIfAbsent(groupOwner, ignored -> new GroupFeedback());
@@ -111,8 +110,7 @@ final class AdaptiveModelPartBatchGate {
         private int find(Object group, Object root, Object type) {
             int mask = groups.length - 1;
             int slot = mix(group, root, type) & mask;
-            while (groups[slot] != null
-                    && (groups[slot] != group || roots[slot] != root || types[slot] != type)) {
+            while (groups[slot] != null && (groups[slot] != group || roots[slot] != root || types[slot] != type)) {
                 slot = (slot + 1) & mask;
             }
             return slot;
