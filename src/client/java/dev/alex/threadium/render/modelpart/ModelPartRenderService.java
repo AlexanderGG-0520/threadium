@@ -175,8 +175,7 @@ public final class ModelPartRenderService {
             metrics.interceptionPassThroughs.increment();
             return ModelPartInterceptionResult.PASS_THROUGH;
         }
-        if (!batchProfitability.observeAndShouldReplace(
-                group.owner(), root, type, config.gpuMinimumGroupSubmits())) {
+        if (!batchProfitability.observeAndShouldReplace(group.owner(), root, type, config.gpuMinimumGroupSubmits())) {
             metrics.vanillaFallbacks.increment();
             metrics.interceptionPassThroughs.increment();
             return ModelPartInterceptionResult.PASS_THROUGH;
