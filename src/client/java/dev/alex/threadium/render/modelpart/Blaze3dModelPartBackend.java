@@ -27,7 +27,6 @@ import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.renderer.rendertype.PreparedRenderType;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.resources.Identifier;
-import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryUtil;
 
@@ -62,7 +61,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
     private final int maxInstances, maxBones;
     private final boolean consolidate;
     private final ModelPartGpuMetrics metrics;
-    private final QueuedList queued = new QueuedList();
+    private final QueuedModelPartArena queued;
     private final ArrayDeque<Group> groups = new ArrayDeque<>();
     private final Map<MeshHandle, Mesh> meshes = new java.util.HashMap<>();
     private final IdentityHashMap<RenderPipeline, RenderPipeline> pipelines = new IdentityHashMap<>();
@@ -88,27 +87,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
 
     private record Mesh(GpuBuffer vertices, GpuBuffer indices, float[] quadCenters, int[] quadBones) {}
 
-    private record Queued(
-            ModelPartBatchKey key,
-            MeshHandle mesh,
-            RenderType type,
-            PreparedRenderType prepared,
-            Matrix4f pose,
-            ModelPartBoneData bones,
-            int light,
-            int overlay,
-            int tint,
-            ModelPartUvTransform uvTransform,
-            ModelPartDecalTransform decalTransform,
-            int decalBase) {}
-
     private record Group(int count, boolean strictlyOrdered) {}
-
-    private static final class QueuedList extends ArrayList<Queued> {
-        void removePrefix(int count) {
-            removeRange(0, count);
-        }
-    }
 
     private static final class PlannedDraw implements Supplier<String> {
         private final InstanceSubmissionOrderPlanner planner = new InstanceSubmissionOrderPlanner();
@@ -162,6 +141,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
 
     public Blaze3dModelPartBackend(int maxInstances, int maxBones, boolean consolidate, ModelPartGpuMetrics metrics) {
         this.maxInstances = maxInstances;
+        queued = new QueuedModelPartArena(maxInstances);
         this.maxBones = maxBones;
         this.consolidate = consolidate;
         this.metrics = metrics;
@@ -344,7 +324,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
         long precheckStart = queueProfileNow();
         if (!state().accepts() || !(renderType instanceof RenderType type)) return false;
         recentPrepared.observe(type);
-        if (!meshes.containsKey(mesh) || queued.size() >= maxInstances) return false;
+        if (!meshes.containsKey(mesh) || queued.isFull()) return false;
         int count = bones.matrices().length / 28;
         Integer existingBase = framePaletteOffsets.get(bones);
         if (existingBase == null && frameBoneCount + count > maxBones) return false;
@@ -393,11 +373,20 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
         long instanceCaptureStart = queueProfileNow();
         int decalBase = decalTransform == null ? -1 : frameDecalCount++;
         ModelPartBatchKey key = recentBatchKey.getOrCreate(mesh, type, epoch, groupId);
-        Matrix4f pose = new Matrix4f(rootPose);
-        Queued entry = new Queued(
-                key, mesh, type, prepared, pose, bones, light, overlay, tint, uvTransform, decalTransform, decalBase);
         long insertionStart = queueProfileNow();
-        queued.add(entry);
+        queued.add(
+                key,
+                mesh,
+                type,
+                prepared,
+                rootPose,
+                bones,
+                light,
+                overlay,
+                tint,
+                uvTransform,
+                decalTransform,
+                decalBase);
         if (existingBase == null) {
             framePaletteOffsets.put(bones, frameBoneCount);
             frameBoneCount = Math.addExact(frameBoneCount, count);
@@ -541,7 +530,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
             ensureFlushScratchCapacity(entryCount);
             exactKeyCount = 0;
             for (int sourceIndex = 0; sourceIndex < entryCount; sourceIndex++) {
-                exactKeysBySourceIndex[sourceIndex] = queued.get(sourceIndex).key;
+                exactKeysBySourceIndex[sourceIndex] = queued.key(sourceIndex);
                 exactKeyCount = sourceIndex + 1;
                 packedIndexBySource[sourceIndex] = -1;
             }
@@ -577,11 +566,11 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
             ByteBuffer bones = boneStaging.clear();
             long bonePackingStart = System.nanoTime();
             for (int sourceIndex = 0; sourceIndex < entryCount; sourceIndex++) {
-                Queued q = queued.get(sourceIndex);
-                if (uploadedFramePalettes.containsKey(q.bones)) continue;
+                ModelPartBoneData sourceBones = queued.bones(sourceIndex);
+                if (uploadedFramePalettes.containsKey(sourceBones)) continue;
 
-                int boneBase = framePaletteOffsets.get(q.bones);
-                int boneCount = q.bones.matrices().length / 28;
+                int boneBase = framePaletteOffsets.get(sourceBones);
+                int boneCount = sourceBones.matrices().length / 28;
                 if (boneUploadBase < 0) boneUploadBase = boneBase;
                 int expectedBase = Math.addExact(boneUploadBase, uploadedBones);
                 if (boneBase != expectedBase) {
@@ -590,8 +579,8 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                             + ", actualBase="
                             + boneBase);
                 }
-                putBones(bones, q.bones);
-                uploadedFramePalettes.put(q.bones, Boolean.TRUE);
+                putBones(bones, sourceBones);
+                uploadedFramePalettes.put(sourceBones, Boolean.TRUE);
                 uploadedBones = Math.addExact(uploadedBones, boneCount);
             }
             long bonePackingNanos = System.nanoTime() - bonePackingStart;
@@ -623,18 +612,21 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                         throw new IllegalStateException("Duplicate ModelPart source instance " + sourceIndex);
                     }
                     packedIndexBySource[sourceIndex] = packedIndex++;
-                    Queued q = queued.get(sourceIndex);
-                    int boneBase = framePaletteOffsets.get(q.bones);
-                    if (q.decalTransform != null) {
+                    ModelPartBoneData sourceBones = queued.bones(sourceIndex);
+                    int boneBase = framePaletteOffsets.get(sourceBones);
+                    ModelPartDecalTransform decalTransform = queued.decalTransform(sourceIndex);
+                    if (decalTransform != null) {
                         ByteBuffer decal = decalStaging.clear();
-                        for (float value : q.decalTransform.values()) decal.putFloat(value);
+                        for (float value : decalTransform.values()) decal.putFloat(value);
                         decal.flip();
                         encoder.writeToBuffer(
-                                decalBuffer.slice((long) q.decalBase * ModelPartLayouts.BONE_STRIDE, decal.remaining()),
+                                decalBuffer.slice(
+                                        (long) queued.decalBase(sourceIndex) * ModelPartLayouts.BONE_STRIDE,
+                                        decal.remaining()),
                                 decal);
                     }
                     long instancePackingStart = profileStart();
-                    putInstance(instances, q, boneBase);
+                    putInstance(instances, queued, sourceIndex, boneBase);
                     packingNanos += profileElapsed(instancePackingStart);
                 }
             }
@@ -659,13 +651,9 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                     sortedCalls += planSortedCalls;
                 } else {
                     InstanceSubmissionOrderPlanner.Plan submission = plan.submission;
+                    submitBatches(encoder, plan, uploadedInstances);
                     for (int batch = 0; batch < submission.batchCount(); batch++) {
-                        int sourceIndex = submission.representativeSourceIndices()[batch];
-                        int firstPackedInstance = submission.firstPackedInstances()[batch];
                         int count = submission.instanceCounts()[batch];
-                        Queued q = queued.get(sourceIndex);
-                        GpuBufferSlice batchInstances = instanceSlice(uploadedInstances, firstPackedInstance, count);
-                        submit(encoder, plan, q, batchInstances, count);
                         calls++;
                         batchableCalls++;
                         batchableInstances += count;
@@ -728,14 +716,15 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
         activePlannedDrawCount = 0;
         PlannedDraw last = null;
         for (int i = 0; i < entryCount; i++) {
-            Queued q = queued.get(i);
+            RenderType type = queued.type(i);
+            PreparedRenderType prepared = queued.prepared(i);
             PlannedDraw plan = null;
-            boolean canConsolidate = consolidate && q.type.canConsolidateConsecutiveGeometry();
-            if (canConsolidate && last != null && last.type == q.type) plan = last;
-            else if (canConsolidate && !strictlyOrdered && !q.type.sortOnUpload()) plan = findDraw(q.prepared);
+            boolean canConsolidate = consolidate && type.canConsolidateConsecutiveGeometry();
+            if (canConsolidate && last != null && last.type == type) plan = last;
+            else if (canConsolidate && !strictlyOrdered && !type.sortOnUpload()) plan = findDraw(prepared);
             if (plan == null) {
-                plan = acquirePlannedDraw(activePlannedDrawCount++, q.type, q.prepared);
-                if (canConsolidate && !strictlyOrdered && !plan.sorted) insertDraw(q.prepared, plan);
+                plan = acquirePlannedDraw(activePlannedDrawCount++, type, prepared);
+                if (canConsolidate && !strictlyOrdered && !plan.sorted) insertDraw(prepared, plan);
             }
             plan.addSourceIndex(i);
             last = plan;
@@ -843,11 +832,11 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
         long sequence = 0, keyStart = System.nanoTime();
         for (int instanceIndex = 0; instanceIndex < plan.sourceCount; instanceIndex++) {
             int instance = plan.sourceIndices[instanceIndex];
-            Queued q = queued.get(instance);
-            Mesh mesh = meshes.get(q.mesh);
+            Mesh mesh = meshes.get(queued.mesh(instance));
+            ModelPartBoneData sourceBones = queued.bones(instance);
             for (int quad = 0; quad < mesh.quadBones.length; quad++) {
                 int bone = mesh.quadBones[quad];
-                if (!visible(q.bones, bone)) continue;
+                if (!visible(sourceBones, bone)) continue;
                 int c = quad * 6;
                 refs.add(SortedModelPartQuads.referenceFromOppositeVertices(
                         instance,
@@ -860,8 +849,9 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                         mesh.quadCenters[c + 4],
                         mesh.quadCenters[c + 5],
                         bone,
-                        q.bones,
-                        q.pose));
+                        sourceBones,
+                        queued.rootMatrices(),
+                        queued.rootMatrixOffset(instance)));
             }
         }
         metrics.sortedKeyComputationNanos.add(System.nanoTime() - keyStart);
@@ -898,19 +888,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                 : null;
         try (RenderPass pass = encoder.createRenderPass(plan, color, Optional.empty(), depth, OptionalDouble.empty())) {
             metrics.blaze3dPassesCreated.increment();
-            pass.setPipeline(pipelineFor(prepared.pipeline()));
-            if (prepared.scissorState().enabled())
-                pass.enableScissor(
-                        prepared.scissorState().x(),
-                        prepared.scissorState().y(),
-                        prepared.scissorState().width(),
-                        prepared.scissorState().height());
-            RenderSystem.bindDefaultUniforms(pass);
-            pass.setUniform("DynamicTransforms", prepared.dynamicTransforms());
-            pass.setUniform("Bones", boneBuffer);
-            pass.setUniform("Decals", decalBuffer);
-            for (PreparedRenderType.Texture texture : prepared.textures())
-                pass.bindTexture(texture.name(), texture.textureView(), texture.sampler());
+            bindPreparedPass(pass, prepared);
             ModelPartPipelineDescriptor descriptor = ModelPartPipelineDescriptor.from(prepared.pipeline());
             for (SortedModelPartQuads.Reference ref : refs) {
                 int sourceIndex = ref.instanceIndex();
@@ -918,8 +896,7 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                 if (packedInstance < 0) {
                     throw new IllegalStateException("Missing packed ModelPart instance for source " + sourceIndex);
                 }
-                Queued q = queued.get(sourceIndex);
-                Mesh mesh = meshes.get(q.mesh);
+                Mesh mesh = meshes.get(queued.mesh(sourceIndex));
                 pass.setVertexBuffer(0, mesh.vertices.slice());
                 pass.setVertexBuffer(1, instanceSlice(uploadedInstances, packedInstance, 1));
                 pass.setIndexBuffer(mesh.indices, IndexType.INT);
@@ -932,17 +909,9 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
         }
     }
 
-    private static boolean visible(ModelPartBoneData bones, int bone) {
-        return (bones.visibility()[bone >>> 6] & (1L << (bone & 63))) != 0;
-    }
-
-    private void submit(
-            com.mojang.blaze3d.systems.CommandEncoder encoder,
-            PlannedDraw plan,
-            Queued q,
-            GpuBufferSlice batchInstances,
-            int count) {
-        PreparedRenderType prepared = q.prepared;
+    private void submitBatches(
+            com.mojang.blaze3d.systems.CommandEncoder encoder, PlannedDraw plan, GpuBufferSlice uploadedInstances) {
+        PreparedRenderType prepared = plan.prepared;
         RenderTarget target = prepared.outputTarget().getRenderTarget();
         var color = RenderSystem.outputColorTextureOverride != null
                 ? RenderSystem.outputColorTextureOverride
@@ -954,27 +923,44 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
                 : null;
         try (RenderPass pass = encoder.createRenderPass(plan, color, Optional.empty(), depth, OptionalDouble.empty())) {
             metrics.blaze3dPassesCreated.increment();
-            pass.setPipeline(pipelineFor(prepared.pipeline()));
-            if (prepared.scissorState().enabled())
-                pass.enableScissor(
-                        prepared.scissorState().x(),
-                        prepared.scissorState().y(),
-                        prepared.scissorState().width(),
-                        prepared.scissorState().height());
-            RenderSystem.bindDefaultUniforms(pass);
-            pass.setUniform("DynamicTransforms", prepared.dynamicTransforms());
-            pass.setUniform("Bones", boneBuffer);
-            pass.setUniform("Decals", decalBuffer);
-            pass.setVertexBuffer(0, meshes.get(q.mesh).vertices.slice());
-            pass.setVertexBuffer(1, batchInstances);
-            for (PreparedRenderType.Texture texture : prepared.textures())
-                pass.bindTexture(texture.name(), texture.textureView(), texture.sampler());
-            pass.setIndexBuffer(meshes.get(q.mesh).indices, IndexType.INT);
-            pass.drawIndexed(q.mesh.indexCount(), count, 0, 0, 0);
-            metrics.pipelineDraw(ModelPartPipelineDescriptor.from(prepared.pipeline()), count);
-            metrics.blaze3dDrawCommands.increment();
-            metrics.blaze3dInstancesSubmitted.add(count);
+            bindPreparedPass(pass, prepared);
+            ModelPartPipelineDescriptor descriptor = ModelPartPipelineDescriptor.from(prepared.pipeline());
+            InstanceSubmissionOrderPlanner.Plan submission = plan.submission;
+            for (int batch = 0; batch < submission.batchCount(); batch++) {
+                int sourceIndex = submission.representativeSourceIndices()[batch];
+                int firstPackedInstance = submission.firstPackedInstances()[batch];
+                int count = submission.instanceCounts()[batch];
+                MeshHandle handle = queued.mesh(sourceIndex);
+                Mesh mesh = meshes.get(handle);
+                pass.setVertexBuffer(0, mesh.vertices.slice());
+                pass.setVertexBuffer(1, instanceSlice(uploadedInstances, firstPackedInstance, count));
+                pass.setIndexBuffer(mesh.indices, IndexType.INT);
+                pass.drawIndexed(handle.indexCount(), count, 0, 0, 0);
+                metrics.pipelineDraw(descriptor, count);
+                metrics.blaze3dDrawCommands.increment();
+                metrics.blaze3dInstancesSubmitted.add(count);
+            }
         }
+    }
+
+    private void bindPreparedPass(RenderPass pass, PreparedRenderType prepared) {
+        pass.setPipeline(pipelineFor(prepared.pipeline()));
+        if (prepared.scissorState().enabled())
+            pass.enableScissor(
+                    prepared.scissorState().x(),
+                    prepared.scissorState().y(),
+                    prepared.scissorState().width(),
+                    prepared.scissorState().height());
+        RenderSystem.bindDefaultUniforms(pass);
+        pass.setUniform("DynamicTransforms", prepared.dynamicTransforms());
+        pass.setUniform("Bones", boneBuffer);
+        pass.setUniform("Decals", decalBuffer);
+        for (PreparedRenderType.Texture texture : prepared.textures())
+            pass.bindTexture(texture.name(), texture.textureView(), texture.sampler());
+    }
+
+    private static boolean visible(ModelPartBoneData bones, int bone) {
+        return (bones.visibility()[bone >>> 6] & (1L << (bone & 63))) != 0;
     }
 
     private static void putBones(ByteBuffer out, ModelPartBoneData data) {
@@ -987,33 +973,25 @@ public final class Blaze3dModelPartBackend implements ModelPartGpuBackend {
         }
     }
 
-    private static void putInstance(ByteBuffer out, Queued q, int boneBase) {
-        Matrix4f m = q.pose;
-        out.putFloat(m.m00())
-                .putFloat(m.m01())
-                .putFloat(m.m02())
-                .putFloat(m.m03())
-                .putFloat(m.m10())
-                .putFloat(m.m11())
-                .putFloat(m.m12())
-                .putFloat(m.m13())
-                .putFloat(m.m20())
-                .putFloat(m.m21())
-                .putFloat(m.m22())
-                .putFloat(m.m23())
-                .putFloat(m.m30())
-                .putFloat(m.m31())
-                .putFloat(m.m32())
-                .putFloat(m.m33());
-        out.putInt(boneBase).putInt(q.light).putInt(q.overlay).putInt(q.decalBase);
-        out.putFloat(((q.tint >>> 16) & 255) / 255f)
-                .putFloat(((q.tint >>> 8) & 255) / 255f)
-                .putFloat((q.tint & 255) / 255f)
-                .putFloat(((q.tint >>> 24) & 255) / 255f);
-        out.putFloat(q.uvTransform.offsetU())
-                .putFloat(q.uvTransform.offsetV())
-                .putFloat(q.uvTransform.scaleU())
-                .putFloat(q.uvTransform.scaleV());
+    private static void putInstance(ByteBuffer out, QueuedModelPartArena queued, int sourceIndex, int boneBase) {
+        float[] matrices = queued.rootMatrices();
+        int matrixOffset = queued.rootMatrixOffset(sourceIndex);
+        for (int component = 0; component < QueuedModelPartArena.ROOT_MATRIX_COMPONENTS; component++)
+            out.putFloat(matrices[matrixOffset + component]);
+        int tint = queued.tint(sourceIndex);
+        out.putInt(boneBase)
+                .putInt(queued.light(sourceIndex))
+                .putInt(queued.overlay(sourceIndex))
+                .putInt(queued.decalBase(sourceIndex));
+        out.putFloat(((tint >>> 16) & 255) / 255f)
+                .putFloat(((tint >>> 8) & 255) / 255f)
+                .putFloat((tint & 255) / 255f)
+                .putFloat(((tint >>> 24) & 255) / 255f);
+        ModelPartUvTransform uvTransform = queued.uvTransform(sourceIndex);
+        out.putFloat(uvTransform.offsetU())
+                .putFloat(uvTransform.offsetV())
+                .putFloat(uvTransform.scaleU())
+                .putFloat(uvTransform.scaleV());
     }
 
     @Override

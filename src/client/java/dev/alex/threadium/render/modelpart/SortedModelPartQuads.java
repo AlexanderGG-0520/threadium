@@ -37,25 +37,72 @@ final class SortedModelPartQuads {
             int boneIndex,
             ModelPartBoneData bones,
             Matrix4fc root) {
-        float[] first = transform(ax, ay, az, boneIndex, bones, root);
-        float[] opposite = transform(cx, cy, cz, boneIndex, bones, root);
-        float px = (first[0] + opposite[0]) * 0.5f;
-        float py = (first[1] + opposite[1]) * 0.5f;
-        float pz = (first[2] + opposite[2]) * 0.5f;
+        float[] matrix = {
+            root.m00(),
+            root.m01(),
+            root.m02(),
+            root.m03(),
+            root.m10(),
+            root.m11(),
+            root.m12(),
+            root.m13(),
+            root.m20(),
+            root.m21(),
+            root.m22(),
+            root.m23(),
+            root.m30(),
+            root.m31(),
+            root.m32(),
+            root.m33()
+        };
+        return referenceFromOppositeVertices(
+                instanceIndex, quadIndex, sequence, ax, ay, az, cx, cy, cz, boneIndex, bones, matrix, 0);
+    }
+
+    static Reference referenceFromOppositeVertices(
+            int instanceIndex,
+            int quadIndex,
+            long sequence,
+            float ax,
+            float ay,
+            float az,
+            float cx,
+            float cy,
+            float cz,
+            int boneIndex,
+            ModelPartBoneData bones,
+            float[] roots,
+            int rootOffset) {
+        float ad = distanceComponents(ax, ay, az, boneIndex, bones, roots, rootOffset, 0);
+        float ae = distanceComponents(ax, ay, az, boneIndex, bones, roots, rootOffset, 1);
+        float af = distanceComponents(ax, ay, az, boneIndex, bones, roots, rootOffset, 2);
+        float cd = distanceComponents(cx, cy, cz, boneIndex, bones, roots, rootOffset, 0);
+        float ce = distanceComponents(cx, cy, cz, boneIndex, bones, roots, rootOffset, 1);
+        float cf = distanceComponents(cx, cy, cz, boneIndex, bones, roots, rootOffset, 2);
+        float px = (ad + cd) * 0.5f;
+        float py = (ae + ce) * 0.5f;
+        float pz = (af + cf) * 0.5f;
         return new Reference(instanceIndex, quadIndex, px * px + py * py + pz * pz, sequence);
     }
 
-    private static float[] transform(
-            float x, float y, float z, int boneIndex, ModelPartBoneData bones, Matrix4fc root) {
+    private static float distanceComponents(
+            float x,
+            float y,
+            float z,
+            int boneIndex,
+            ModelPartBoneData bones,
+            float[] roots,
+            int rootOffset,
+            int component) {
         int base = boneIndex * 28;
         float[] m = bones.matrices();
         float bx = m[base] * x + m[base + 4] * y + m[base + 8] * z + m[base + 12];
         float by = m[base + 1] * x + m[base + 5] * y + m[base + 9] * z + m[base + 13];
         float bz = m[base + 2] * x + m[base + 6] * y + m[base + 10] * z + m[base + 14];
-        float px = root.m00() * bx + root.m10() * by + root.m20() * bz + root.m30();
-        float py = root.m01() * bx + root.m11() * by + root.m21() * bz + root.m31();
-        float pz = root.m02() * bx + root.m12() * by + root.m22() * bz + root.m32();
-        return new float[] {px, py, pz};
+        return roots[rootOffset + component] * bx
+                + roots[rootOffset + 4 + component] * by
+                + roots[rootOffset + 8 + component] * bz
+                + roots[rootOffset + 12 + component];
     }
 
     static void sort(List<Reference> references) {
