@@ -29,12 +29,14 @@ public final class ModelPartRenderService {
     private final ModelPartMeshCache cache;
     private final GenericModelPartMeshBaker baker = new GenericModelPartMeshBaker();
     private final GenericModelPartPoseExtractor poses = new GenericModelPartPoseExtractor();
+    private final FrameBoneDataArena poseArena = new FrameBoneDataArena();
     /** Model roots are renderer-owned and shared; pose fields remain live on the cached nodes. */
     private final ModelPartTopologyCache topologies = new ModelPartTopologyCache();
 
     private final FrameBonePaletteCache posePalettes = new FrameBonePaletteCache();
     private final AdaptiveModelPartBatchGate batchProfitability = new AdaptiveModelPartBatchGate();
     private final ArrayDeque<GroupScope> groupReplacementScopes = new ArrayDeque<>();
+    private final ArrayDeque<Object> submittedGroupOwners = new ArrayDeque<>();
     private long generation;
 
     private ModelPartRenderService(ThreadiumConfig c) {
@@ -173,7 +175,8 @@ public final class ModelPartRenderService {
             metrics.interceptionPassThroughs.increment();
             return ModelPartInterceptionResult.PASS_THROUGH;
         }
-        if (!batchProfitability.observeAndShouldReplace(group.ordinal(), root, type, config.gpuMinimumGroupSubmits())) {
+        if (!batchProfitability.observeAndShouldReplace(
+                group.owner(), root, type, config.gpuMinimumGroupSubmits())) {
             metrics.vanillaFallbacks.increment();
             metrics.interceptionPassThroughs.increment();
             return ModelPartInterceptionResult.PASS_THROUGH;
@@ -261,7 +264,7 @@ public final class ModelPartRenderService {
                 }
             } else {
                 long compositionStart = System.nanoTime();
-                boneData = poses.extract(topology);
+                boneData = poses.extract(topology, poseArena);
                 metrics.boneCompositionNanos.add(System.nanoTime() - compositionStart);
                 boolean stored = posePalettes.store(boneData);
                 if (lookupPerformed) metrics.posePaletteMisses.increment();
@@ -410,8 +413,10 @@ public final class ModelPartRenderService {
         refreshIrisShaderState();
         if (DifferentialExecutionScope.active()) DifferentialExecutionScope.reset();
         groupReplacementScopes.clear();
+        submittedGroupOwners.clear();
         batchProfitability.beginFrame();
         posePalettes.beginFrame();
+        poseArena.beginFrame();
         backend.beginFrame();
         diagnosticOverlay.beginFrame(debugMode);
     }
@@ -434,6 +439,7 @@ public final class ModelPartRenderService {
         cache.clear();
         topologies.clear();
         posePalettes.clear();
+        poseArena.clear();
         backend.clear();
         backend.close();
         backend = new SelectingModelPartGpuBackend(
@@ -458,13 +464,13 @@ public final class ModelPartRenderService {
         diagnosticOverlay.drawMainTargetTail(debugMode);
     }
 
-    public void beginGroup(boolean strictlyOrdered, int submitCount) {
+    public void beginGroup(Object groupOwner, boolean strictlyOrdered, int submitCount) {
         backend.beginGroup(strictlyOrdered);
         boolean parentAllows = groupReplacementScopes.isEmpty()
                 || groupReplacementScopes.getLast().allowed();
-        int ordinal = batchProfitability.nextGroupOrdinal();
         groupReplacementScopes.addLast(new GroupScope(
-                parentAllows && groupMeetsMinimum(submitCount, config.gpuMinimumGroupSubmits()), ordinal));
+                parentAllows && groupMeetsMinimum(submitCount, config.gpuMinimumGroupSubmits()), groupOwner));
+        submittedGroupOwners.addLast(groupOwner);
     }
 
     public void endGroup() {
@@ -480,19 +486,22 @@ public final class ModelPartRenderService {
         return submitCount >= minimumSubmits;
     }
 
-    private record GroupScope(boolean allowed, int ordinal) {}
+    private record GroupScope(boolean allowed, Object owner) {}
 
     static boolean requiresVanillaForSortedPipeline(boolean sortOnUpload) {
         return sortOnUpload;
     }
 
     public void flush() {
-        backend.flushGroup();
+        Object groupOwner = submittedGroupOwners.pollFirst();
+        ModelPartGpuBackend.FlushStats stats = backend.flushGroup();
+        batchProfitability.recordFlush(groupOwner, stats);
     }
 
     public void invalidate() {
         DifferentialExecutionScope.reset();
         groupReplacementScopes.clear();
+        submittedGroupOwners.clear();
         batchProfitability.clear();
         generation++;
         backend.invalidatePipelines(generation);
@@ -500,6 +509,7 @@ public final class ModelPartRenderService {
         cache.clear();
         topologies.clear();
         posePalettes.clear();
+        poseArena.clear();
         backend.clear();
         if (backend.state() == ModelPartBackendState.FAILED) {
             backend.close();
