@@ -68,9 +68,8 @@ replace_once(
           python .github/scripts/apply_beta7_runtime_fix.py
           rm -f .github/workflows/apply-beta7-runtime-fix-v2.yml
           gradle --no-daemon spotlessApply
-          gradle --no-daemon clean spotlessCheck test build
 
-      - name: Commit validated implementation
+      - name: Persist implementation branch
         shell: bash
         run: |
           set -euo pipefail
@@ -79,3 +78,6 @@ replace_once(
           git add --all
           git commit -m "Fix beta.7 pass consolidation and production metrics"
           git push origin HEAD:fix/beta7-runtime-validation
+
+      - name: Validate persisted implementation
+        run: gradle --no-daemon clean spotlessCheck test build
