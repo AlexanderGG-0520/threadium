@@ -11,9 +11,23 @@ public final class GenericModelPartPoseExtractor {
 
     public ModelPartBoneData extract(GenericModelPartTopology topology) {
         int boneCount = topology.nodes().size();
+        return extract(topology, new ModelPartBoneData(
+                new float[Math.multiplyExact(boneCount, FLOATS_PER_BONE)], new long[(boneCount + 63) >>> 6]));
+    }
+
+    ModelPartBoneData extract(GenericModelPartTopology topology, FrameBoneDataArena arena) {
+        return extract(topology, arena.acquire(topology.nodes().size()));
+    }
+
+    private ModelPartBoneData extract(GenericModelPartTopology topology, ModelPartBoneData result) {
+        int boneCount = topology.nodes().size();
         scratch.ensureCapacity(boneCount);
-        float[] out = new float[Math.multiplyExact(boneCount, FLOATS_PER_BONE)];
-        long[] visibility = new long[(boneCount + 63) >>> 6];
+        float[] out = result.matrices();
+        long[] visibility = result.visibility();
+        if (out.length != Math.multiplyExact(boneCount, FLOATS_PER_BONE)
+                || visibility.length != (boneCount + 63) >>> 6) {
+            throw new IllegalArgumentException("Pose output capacity does not match topology");
+        }
         for (GenericModelPartTopology.Node node : topology.nodes()) {
             var part = node.part();
             Matrix4f matrix = TransformMath.compose(
@@ -48,6 +62,6 @@ public final class GenericModelPartPoseExtractor {
             out[base + 26] = normal.m22();
             out[base + 27] = 0;
         }
-        return new ModelPartBoneData(out, visibility);
+        return result;
     }
 }
