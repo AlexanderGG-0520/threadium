@@ -11,6 +11,7 @@ import net.fabricmc.loader.api.FabricLoader;
 
 /** Aggregate-only Phase 0 metrics. No hot-path strings or per-entity logging. */
 public final class ThreadiumMetrics {
+    private static final boolean HOT_PATH_METRICS = Boolean.getBoolean("threadium.metrics.hotPath");
     private static volatile ThreadiumMetrics current;
     private volatile ThreadiumRuntimeConfig.Snapshot runtimeConfig;
     private final boolean blockEntityTimingEnabled;
@@ -39,14 +40,21 @@ public final class ThreadiumMetrics {
         if (current == metrics) current = null;
     }
 
+    private static boolean hotPathMetricsEnabled() {
+        return HOT_PATH_METRICS || dev.alex.threadium.benchmark.ThreadiumBenchmark.active();
+    }
+
     public static boolean isTimingEnabled() {
         ThreadiumMetrics metrics = current;
-        return metrics != null && metrics.runtimeConfig.metricsEnabled();
+        return metrics != null && hotPathMetricsEnabled() && metrics.runtimeConfig.metricsEnabled();
     }
 
     public static boolean isBlockEntityTimingEnabled() {
         ThreadiumMetrics metrics = current;
-        return metrics != null && metrics.blockEntityTimingEnabled && metrics.runtimeConfig.metricsEnabled();
+        return metrics != null
+                && hotPathMetricsEnabled()
+                && metrics.blockEntityTimingEnabled
+                && metrics.runtimeConfig.metricsEnabled();
     }
 
     public static void recordWorldRenderNanos(long nanos) {
@@ -67,7 +75,7 @@ public final class ThreadiumMetrics {
 
     private static void record(int metric, long nanos) {
         ThreadiumMetrics metrics = current;
-        if (metrics == null || !metrics.runtimeConfig.metricsEnabled()) return;
+        if (metrics == null || !hotPathMetricsEnabled() || !metrics.runtimeConfig.metricsEnabled()) return;
         switch (metric) {
             case 0 -> metrics.worldRender.record(nanos);
             case 1 -> metrics.entityExtraction.record(nanos);
@@ -79,7 +87,7 @@ public final class ThreadiumMetrics {
 
     public static void recordEntityVisibilityCheck(boolean visible) {
         ThreadiumMetrics metrics = current;
-        if (metrics == null || !metrics.runtimeConfig.metricsEnabled()) return;
+        if (metrics == null || !hotPathMetricsEnabled() || !metrics.runtimeConfig.metricsEnabled()) return;
         metrics.entityVisibilityChecks.incrementAndGet();
         if (!visible) metrics.entityVisibilityRejected.incrementAndGet();
     }
@@ -94,7 +102,7 @@ public final class ThreadiumMetrics {
 
     private static void recordCounter(int counter) {
         ThreadiumMetrics metrics = current;
-        if (metrics == null || !metrics.runtimeConfig.metricsEnabled()) return;
+        if (metrics == null || !hotPathMetricsEnabled() || !metrics.runtimeConfig.metricsEnabled()) return;
         if (counter == 0) metrics.entityRenderStatesExtracted.incrementAndGet();
         else metrics.entityStatesSubmitted.incrementAndGet();
     }
