@@ -21,7 +21,8 @@ abstract class RenderTypeFeatureRendererMixin {
             FeatureFrameContext context, List<? extends SubmitNode> submits, boolean ordered, CallbackInfo ci) {
         if ((Object) this instanceof ModelFeatureRenderer) {
             ModelPartRenderService service = ModelPartRenderService.get();
-            if (service != null && service.replacementEnabled()) service.beginGroup(ordered, submits.size());
+            if (service != null && service.replacementEnabled())
+                service.beginGroup(this, ordered, submits.size());
         }
     }
 
@@ -36,6 +37,7 @@ abstract class RenderTypeFeatureRendererMixin {
             if (service != null && service.replacementEnabled()) service.endGroup();
         }
     }
+
     /** Flushes accepted opaque/cutout model batches at the matching feature execution boundary. */
     @Inject(
             method = "executeGroup(Lnet/minecraft/client/renderer/feature/FeatureFrameContext;ILjava/util/List;Z)V",
