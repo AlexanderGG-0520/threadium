@@ -5,7 +5,7 @@ import java.util.IdentityHashMap;
 
 /** Render-thread-owned exact pose cache. Palette objects are valid for one frame only. */
 final class FrameBonePaletteCache {
-    static final int MISS_PROBE_LIMIT = 16;
+    static final int MISS_PROBE_LIMIT = 4;
 
     private final IdentityHashMap<GenericModelPartTopology, ReuseProbe> reuseProbes = new IdentityHashMap<>();
     private int[] table = new int[16];
@@ -52,6 +52,7 @@ final class FrameBonePaletteCache {
     }
 
     private ModelPartBoneData recentHit(ReuseProbe probe) {
+        probe.hits++;
         lastLookupPerformed = true;
         lastLookupUsedRecent = true;
         capturedForStore = false;
@@ -62,15 +63,18 @@ final class FrameBonePaletteCache {
         lastLookupPerformed = true;
         int found = findCaptured(hash);
         if (found >= 0) {
+            probe.hits++;
             probe.reuseConfirmed = true;
             probe.recentEntry = found;
             capturedForStore = false;
             return palettes[found];
         }
         probe.misses++;
-        // A confirmed hit keeps exact dedup active. Otherwise bound unique-pose probing per frame.
-        capturedForStore = probe.reuseConfirmed || probe.misses < MISS_PROBE_LIMIT;
-        if (!capturedForStore) probe.bypass = true;
+        // Probe a few unique poses, then continue only while exact reuse remains common enough to repay capture costs.
+        boolean withinInitialBudget = probe.misses < MISS_PROBE_LIMIT;
+        boolean reuseStillDominant = probe.reuseConfirmed && (long) probe.hits * 2L >= probe.misses;
+        capturedForStore = withinInitialBudget || reuseStillDominant;
+        if (!capturedForStore && probe.misses >= MISS_PROBE_LIMIT) probe.bypass = true;
         return null;
     }
 
@@ -239,12 +243,14 @@ final class FrameBonePaletteCache {
     }
 
     private static final class ReuseProbe {
+        private int hits;
         private int misses;
         private int recentEntry = -1;
         private boolean reuseConfirmed;
         private boolean bypass;
 
         private void beginFrame() {
+            hits = 0;
             misses = 0;
             recentEntry = -1;
             reuseConfirmed = false;
