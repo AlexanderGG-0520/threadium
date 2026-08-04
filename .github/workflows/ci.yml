@@ -23,7 +23,11 @@ jobs:
         with:
           distribution: zulu
           java-version: "25"
-          cache: gradle
+
+      - name: Set up Gradle 9.6.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.1"
 
       - name: Validate and build
-        run: ./gradlew --no-daemon clean spotlessCheck test build
+        run: gradle --no-daemon clean spotlessCheck test build
