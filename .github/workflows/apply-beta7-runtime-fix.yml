@@ -35,6 +35,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/scripts/apply_beta7_runtime_fix.py')
+          text = path.read_text()
+          old = r'''    "        return \"gpuEntity={state=\" + backend.state() + \",selectedBackend=\" + backend.selected()\n",
+              "        return \"gpuEntity={state=\" + backend.state() + \",selectedBackend=\" + backend.selected()\n                + \",detailedMetrics=true\"\n",
+          '''
+          new = r'''    "        return \"gpuEntity={state=\" + backend.state() + \",selectedBackend=\" + backend.selected()\n                + \",initializationAttempts=\"",
+              "        return \"gpuEntity={state=\" + backend.state() + \",selectedBackend=\" + backend.selected()\n                + \",detailedMetrics=true\"\n                + \",initializationAttempts=\"",
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'automation matcher repair expected one match, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python .github/scripts/apply_beta7_runtime_fix.py
           gradle --no-daemon spotlessApply
           gradle --no-daemon clean spotlessCheck test build
