@@ -33,14 +33,14 @@ public final class ThreadiumMetrics {
         this.runtimeConfig = ThreadiumRuntimeConfig.effective();
         this.blockEntityTimingEnabled = !FabricLoader.getInstance().isModLoaded("sodium");
         current = this;
-        StagedVertexMetrics.configure(config.metricsEnabled());
+        StagedVertexMetrics.configure(config.metricsEnabled() && hotPathMetricsEnabled());
     }
 
     public static void deactivate(ThreadiumMetrics metrics) {
         if (current == metrics) current = null;
     }
 
-    private static boolean hotPathMetricsEnabled() {
+    public static boolean hotPathMetricsEnabled() {
         return HOT_PATH_METRICS || dev.alex.threadium.benchmark.ThreadiumBenchmark.active();
     }
 
@@ -75,7 +75,7 @@ public final class ThreadiumMetrics {
 
     private static void record(int metric, long nanos) {
         ThreadiumMetrics metrics = current;
-        if (metrics == null || !metrics.runtimeConfig.metricsEnabled()) return;
+        if (metrics == null || !hotPathMetricsEnabled() || !metrics.runtimeConfig.metricsEnabled()) return;
         switch (metric) {
             case 0 -> metrics.worldRender.record(nanos);
             case 1 -> metrics.entityExtraction.record(nanos);
@@ -135,7 +135,7 @@ public final class ThreadiumMetrics {
         if (wasEnabled == snapshot.metricsEnabled()) return;
         resetAll();
         lastReportNanos = System.nanoTime();
-        StagedVertexMetrics.configure(snapshot.metricsEnabled());
+        StagedVertexMetrics.configure(snapshot.metricsEnabled() && hotPathMetricsEnabled());
     }
 
     private void resetAll() {

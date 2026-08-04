@@ -3,6 +3,10 @@
 Run from the repository root with Java 25 available. These commands use the
 normal Gradle wrapper and do not create a release artifact with Sodium bundled.
 
+Detailed hot-path metrics are disabled during normal play. Add
+`-Dthreadium.metrics.hotPath=true` only for diagnostic runs; do not use that
+property for FPS or frame-time comparisons.
+
 ```fish
 set -lx JAVA_HOME /usr/lib/jvm/zulu-25
 set -lx PATH $JAVA_HOME/bin $PATH

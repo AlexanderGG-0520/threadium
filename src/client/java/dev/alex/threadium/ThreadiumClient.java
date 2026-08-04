@@ -9,6 +9,7 @@ import dev.alex.threadium.lifecycle.ThreadiumLifecycle;
 import dev.alex.threadium.metrics.ThreadiumMetrics;
 import dev.alex.threadium.render.modelpart.ModelPartRenderService;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,6 +34,10 @@ public final class ThreadiumClient implements ClientModInitializer {
         if (benchmarkMode.isEmpty()
                 || BenchmarkStartupOwnership.forMode(benchmarkMode.get()).modelPartRenderer())
             ModelPartRenderService.initialize(config);
-        LOGGER.info("Threadium {} initialized", "0.1.0-SNAPSHOT");
+        String version = FabricLoader.getInstance()
+                .getModContainer(MOD_ID)
+                .map(container -> container.getMetadata().getVersion().getFriendlyString())
+                .orElse("unknown");
+        LOGGER.info("Threadium {} initialized", version);
     }
 }

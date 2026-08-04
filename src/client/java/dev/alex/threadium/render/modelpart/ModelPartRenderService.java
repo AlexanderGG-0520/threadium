@@ -731,6 +731,9 @@ public final class ModelPartRenderService {
     }
 
     public String metricsSnapshot() {
+        if (!ModelPartGpuMetrics.detailedMetricsEnabled())
+            return "gpuEntity={state=" + backend.state() + ",selectedBackend=" + backend.selected()
+                    + ",detailedMetrics=false,cachedMeshes=" + cache.size() + ",meshGpuBytes=" + cache.bytes() + '}';
         long drawn = metrics.drawnInstances.sumThenReset(),
                 calls = metrics.drawCalls.sumThenReset(),
                 batchableInstances = metrics.batchableInstances.sumThenReset(),
@@ -740,6 +743,7 @@ public final class ModelPartRenderService {
                 multiInstances = metrics.totalInstancesInMultiDraws.sumThenReset();
         int maximum = metrics.maximumInstancesPerDraw.getAndSet(0);
         return "gpuEntity={state=" + backend.state() + ",selectedBackend=" + backend.selected()
+                + ",detailedMetrics=true"
                 + ",initializationAttempts=" + metrics.initializationAttempts.sum() + ",initializationSuccesses="
                 + metrics.initializationSuccesses.sum() + ",initializationFailures="
                 + metrics.initializationFailures.sum() + ",eligibleInvocations="
@@ -776,7 +780,11 @@ public final class ModelPartRenderService {
     }
 
     public String visualMetricsSnapshot() {
+        if (!ModelPartGpuMetrics.detailedMetricsEnabled())
+            return VisualDiagnosticMetrics.snapshot(DebugVisualMode.parse(config.gpuDebugVisualMode()))
+                    + ",modelPartDetailedMetrics=false";
         return VisualDiagnosticMetrics.snapshot(DebugVisualMode.parse(config.gpuDebugVisualMode()))
+                + ",modelPartDetailedMetrics=true"
                 + ",blaze3dPipelineCompileAttempts=" + metrics.blaze3dPipelineCompileAttempts.sum()
                 + ",blaze3dPipelineCompileValid=" + metrics.blaze3dPipelineCompileValid.sum()
                 + ",blaze3dPipelineCompileInvalid=" + metrics.blaze3dPipelineCompileInvalid.sum()

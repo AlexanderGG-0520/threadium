@@ -1,8 +1,24 @@
 package dev.alex.threadium.render.modelpart;
 
+import dev.alex.threadium.metrics.ThreadiumMetrics;
 import java.util.concurrent.atomic.LongAdder;
 
 public final class ModelPartGpuMetrics {
+    private static final class HotPathLongAdder extends LongAdder {
+        @Override
+        public void add(long value) {
+            if (detailedMetricsEnabled()) super.add(value);
+        }
+    }
+
+    static boolean detailedMetricsEnabled() {
+        return ThreadiumMetrics.hotPathMetricsEnabled();
+    }
+
+    private static LongAdder hotCounter() {
+        return new HotPathLongAdder();
+    }
+
     private final java.util.concurrent.atomic.AtomicLongArray pipelineAccepted =
             new java.util.concurrent.atomic.AtomicLongArray(ModelPartPipelineDescriptor.values().length);
     private final java.util.concurrent.atomic.AtomicLongArray pipelineFallback =
@@ -13,110 +29,110 @@ public final class ModelPartGpuMetrics {
             new java.util.concurrent.atomic.AtomicLongArray(ModelPartPipelineDescriptor.values().length);
     private final java.util.concurrent.atomic.AtomicIntegerArray pipelineMaximumBatch =
             new java.util.concurrent.atomic.AtomicIntegerArray(ModelPartPipelineDescriptor.values().length);
-    private final LongAdder unknownPipelineFallbacks = new LongAdder();
-    public final LongAdder eligibleInvocations = new LongAdder(),
-            acceptedInvocations = new LongAdder(),
-            queuedInstances = new LongAdder();
-    public final LongAdder drawnInstances = new LongAdder(),
-            batches = new LongAdder(),
-            instancedDraws = new LongAdder(),
-            meshHits = new LongAdder();
-    public final LongAdder meshMisses = new LongAdder(),
-            meshBakeFailures = new LongAdder(),
-            vanillaFallbacks = new LongAdder(),
-            capacityFallbacks = new LongAdder();
-    public final LongAdder backendFailures = new LongAdder(),
-            boneBytesUploaded = new LongAdder(),
-            instanceBytesUploaded = new LongAdder();
-    public final LongAdder initializationAttempts = new LongAdder(),
-            initializationSuccesses = new LongAdder(),
-            initializationFailures = new LongAdder();
-    public final LongAdder backendUnavailableFallbacks = new LongAdder(),
-            materialFallbacks = new LongAdder(),
-            drawCalls = new LongAdder();
-    public final LongAdder batchableInstances = new LongAdder(),
-            batchableDrawCalls = new LongAdder(),
-            sortedInstances = new LongAdder(),
-            sortedDrawCalls = new LongAdder();
-    public final LongAdder consolidatedBatches = new LongAdder(),
-            singletonBatches = new LongAdder(),
-            multiInstanceBatches = new LongAdder(),
-            totalInstancesInMultiDraws = new LongAdder(),
-            instanceUploadCalls = new LongAdder(),
-            boneUploadCalls = new LongAdder();
-    public final LongAdder interceptionPassThroughs = new LongAdder(),
-            diagnosticOverlayRequests = new LongAdder(),
-            diagnosticOverlayDraws = new LongAdder();
-    public final LongAdder productionReplacementAccepts = new LongAdder(),
-            vanillaSuppressions = new LongAdder(),
-            forbiddenSuppressionAttempts = new LongAdder();
-    public final LongAdder diagnosticOverlayFailures = new LongAdder();
-    public final LongAdder blaze3dGroupsSubmitted = new LongAdder(),
-            blaze3dPassesCreated = new LongAdder(),
-            blaze3dDrawCommands = new LongAdder(),
-            blaze3dInstancesSubmitted = new LongAdder(),
-            blaze3dSubmissionFailures = new LongAdder(),
-            blaze3dUnsupportedFallbacks = new LongAdder(),
-            rawProductionDrawCalls = new LongAdder();
-    public final LongAdder blaze3dPipelineCompileAttempts = new LongAdder(),
-            blaze3dPipelineCompileValid = new LongAdder(),
-            blaze3dPipelineCompileInvalid = new LongAdder(),
-            blaze3dPipelineCompileExceptions = new LongAdder(),
-            blaze3dPipelineValidityUnknown = new LongAdder();
-    public final LongAdder blaze3dPipelineStaleFallbacks = new LongAdder(),
-            blaze3dInvalidPipelineFallbacks = new LongAdder(),
-            blaze3dUnsupportedBackendFallbacks = new LongAdder();
-    public final LongAdder modelLayoutCacheHits = new LongAdder(),
-            modelLayoutCacheMisses = new LongAdder(),
-            modelTopologyTraversals = new LongAdder(),
-            topologyPreparationNanos = new LongAdder();
-    public final LongAdder posePaletteLookups = new LongAdder(),
-            posePaletteHits = new LongAdder(),
-            posePaletteMisses = new LongAdder(),
-            posePaletteBypasses = new LongAdder(),
-            directPackedPosePalettes = new LongAdder(),
-            uniqueBonePalettes = new LongAdder(),
-            reusedBonePalettes = new LongAdder();
-    public final LongAdder boneMatricesComposed = new LongAdder(),
-            boneMatricesAvoided = new LongAdder(),
-            boneBytesRequested = new LongAdder(),
-            boneBytesAvoided = new LongAdder();
-    public final LongAdder interceptProfileCount = new LongAdder(),
-            interceptTotalNanos = new LongAdder(),
-            interceptPipelineValidationNanos = new LongAdder(),
-            interceptTopologyAndMeshLookupNanos = new LongAdder(),
-            interceptPosePreparationNanos = new LongAdder(),
-            interceptMaterialCaptureNanos = new LongAdder(),
-            interceptBackendQueueNanos = new LongAdder();
-    public final LongAdder poseLookupNanos = new LongAdder(),
-            boneCompositionNanos = new LongAdder(),
-            bonePackingNanos = new LongAdder();
-    public final LongAdder backendQueueProfileCount = new LongAdder(),
-            backendQueuePrepareCalls = new LongAdder(),
-            backendQueuePrepareReuseHits = new LongAdder(),
-            backendQueueSelectorNanos = new LongAdder(),
-            backendQueuePrecheckNanos = new LongAdder(),
-            backendQueuePrepareNanos = new LongAdder(),
-            backendQueuePreparedValidationNanos = new LongAdder(),
-            backendQueueInstanceCaptureNanos = new LongAdder(),
-            backendQueueInsertionAndPaletteNanos = new LongAdder();
-    public final LongAdder blaze3dFlushCount = new LongAdder(),
-            blaze3dFlushTotalNanos = new LongAdder(),
-            blaze3dBoneAndInstancePackingNanos = new LongAdder(),
-            blaze3dBoneUploadNanos = new LongAdder(),
-            blaze3dInstanceUploadNanos = new LongAdder(),
-            blaze3dDrawPlanningNanos = new LongAdder(),
-            blaze3dDrawSubmissionNanos = new LongAdder();
-    public final LongAdder sortedPipelineInstances = new LongAdder(),
-            sortedQuadsCollected = new LongAdder(),
-            sortedQuadsSubmitted = new LongAdder(),
-            sortedGroups = new LongAdder();
-    public final LongAdder sortedIndirectCommands = new LongAdder(),
-            sortedCpuFallbackDraws = new LongAdder(),
-            sortedPreparationNanos = new LongAdder(),
-            sortedKeyComputationNanos = new LongAdder(),
-            sortedOrderingNanos = new LongAdder(),
-            sortedSubmissionNanos = new LongAdder();
+    private final LongAdder unknownPipelineFallbacks = hotCounter();
+    public final LongAdder eligibleInvocations = hotCounter(),
+            acceptedInvocations = hotCounter(),
+            queuedInstances = hotCounter();
+    public final LongAdder drawnInstances = hotCounter(),
+            batches = hotCounter(),
+            instancedDraws = hotCounter(),
+            meshHits = hotCounter();
+    public final LongAdder meshMisses = hotCounter(),
+            meshBakeFailures = hotCounter(),
+            vanillaFallbacks = hotCounter(),
+            capacityFallbacks = hotCounter();
+    public final LongAdder backendFailures = hotCounter(),
+            boneBytesUploaded = hotCounter(),
+            instanceBytesUploaded = hotCounter();
+    public final LongAdder initializationAttempts = hotCounter(),
+            initializationSuccesses = hotCounter(),
+            initializationFailures = hotCounter();
+    public final LongAdder backendUnavailableFallbacks = hotCounter(),
+            materialFallbacks = hotCounter(),
+            drawCalls = hotCounter();
+    public final LongAdder batchableInstances = hotCounter(),
+            batchableDrawCalls = hotCounter(),
+            sortedInstances = hotCounter(),
+            sortedDrawCalls = hotCounter();
+    public final LongAdder consolidatedBatches = hotCounter(),
+            singletonBatches = hotCounter(),
+            multiInstanceBatches = hotCounter(),
+            totalInstancesInMultiDraws = hotCounter(),
+            instanceUploadCalls = hotCounter(),
+            boneUploadCalls = hotCounter();
+    public final LongAdder interceptionPassThroughs = hotCounter(),
+            diagnosticOverlayRequests = hotCounter(),
+            diagnosticOverlayDraws = hotCounter();
+    public final LongAdder productionReplacementAccepts = hotCounter(),
+            vanillaSuppressions = hotCounter(),
+            forbiddenSuppressionAttempts = hotCounter();
+    public final LongAdder diagnosticOverlayFailures = hotCounter();
+    public final LongAdder blaze3dGroupsSubmitted = hotCounter(),
+            blaze3dPassesCreated = hotCounter(),
+            blaze3dDrawCommands = hotCounter(),
+            blaze3dInstancesSubmitted = hotCounter(),
+            blaze3dSubmissionFailures = hotCounter(),
+            blaze3dUnsupportedFallbacks = hotCounter(),
+            rawProductionDrawCalls = hotCounter();
+    public final LongAdder blaze3dPipelineCompileAttempts = hotCounter(),
+            blaze3dPipelineCompileValid = hotCounter(),
+            blaze3dPipelineCompileInvalid = hotCounter(),
+            blaze3dPipelineCompileExceptions = hotCounter(),
+            blaze3dPipelineValidityUnknown = hotCounter();
+    public final LongAdder blaze3dPipelineStaleFallbacks = hotCounter(),
+            blaze3dInvalidPipelineFallbacks = hotCounter(),
+            blaze3dUnsupportedBackendFallbacks = hotCounter();
+    public final LongAdder modelLayoutCacheHits = hotCounter(),
+            modelLayoutCacheMisses = hotCounter(),
+            modelTopologyTraversals = hotCounter(),
+            topologyPreparationNanos = hotCounter();
+    public final LongAdder posePaletteLookups = hotCounter(),
+            posePaletteHits = hotCounter(),
+            posePaletteMisses = hotCounter(),
+            posePaletteBypasses = hotCounter(),
+            directPackedPosePalettes = hotCounter(),
+            uniqueBonePalettes = hotCounter(),
+            reusedBonePalettes = hotCounter();
+    public final LongAdder boneMatricesComposed = hotCounter(),
+            boneMatricesAvoided = hotCounter(),
+            boneBytesRequested = hotCounter(),
+            boneBytesAvoided = hotCounter();
+    public final LongAdder interceptProfileCount = hotCounter(),
+            interceptTotalNanos = hotCounter(),
+            interceptPipelineValidationNanos = hotCounter(),
+            interceptTopologyAndMeshLookupNanos = hotCounter(),
+            interceptPosePreparationNanos = hotCounter(),
+            interceptMaterialCaptureNanos = hotCounter(),
+            interceptBackendQueueNanos = hotCounter();
+    public final LongAdder poseLookupNanos = hotCounter(),
+            boneCompositionNanos = hotCounter(),
+            bonePackingNanos = hotCounter();
+    public final LongAdder backendQueueProfileCount = hotCounter(),
+            backendQueuePrepareCalls = hotCounter(),
+            backendQueuePrepareReuseHits = hotCounter(),
+            backendQueueSelectorNanos = hotCounter(),
+            backendQueuePrecheckNanos = hotCounter(),
+            backendQueuePrepareNanos = hotCounter(),
+            backendQueuePreparedValidationNanos = hotCounter(),
+            backendQueueInstanceCaptureNanos = hotCounter(),
+            backendQueueInsertionAndPaletteNanos = hotCounter();
+    public final LongAdder blaze3dFlushCount = hotCounter(),
+            blaze3dFlushTotalNanos = hotCounter(),
+            blaze3dBoneAndInstancePackingNanos = hotCounter(),
+            blaze3dBoneUploadNanos = hotCounter(),
+            blaze3dInstanceUploadNanos = hotCounter(),
+            blaze3dDrawPlanningNanos = hotCounter(),
+            blaze3dDrawSubmissionNanos = hotCounter();
+    public final LongAdder sortedPipelineInstances = hotCounter(),
+            sortedQuadsCollected = hotCounter(),
+            sortedQuadsSubmitted = hotCounter(),
+            sortedGroups = hotCounter();
+    public final LongAdder sortedIndirectCommands = hotCounter(),
+            sortedCpuFallbackDraws = hotCounter(),
+            sortedPreparationNanos = hotCounter(),
+            sortedKeyComputationNanos = hotCounter(),
+            sortedOrderingNanos = hotCounter(),
+            sortedSubmissionNanos = hotCounter();
     public final java.util.concurrent.atomic.AtomicInteger maximumInstancesPerDraw =
             new java.util.concurrent.atomic.AtomicInteger();
 
@@ -167,10 +183,12 @@ public final class ModelPartGpuMetrics {
     }
 
     void pipelineAccepted(ModelPartPipelineDescriptor descriptor) {
+        if (!detailedMetricsEnabled()) return;
         if (descriptor != null) pipelineAccepted.incrementAndGet(descriptor.ordinal());
     }
 
     void pipelineFallback(ModelPartPipelineDescriptor descriptor) {
+        if (!detailedMetricsEnabled()) return;
         if (descriptor != null) pipelineFallback.incrementAndGet(descriptor.ordinal());
         else unknownPipelineFallbacks.increment();
     }
@@ -181,6 +199,7 @@ public final class ModelPartGpuMetrics {
     }
 
     void pipelineDrawCommand(ModelPartPipelineDescriptor descriptor) {
+        if (!detailedMetricsEnabled()) return;
         if (descriptor != null) pipelineDrawCalls.incrementAndGet(descriptor.ordinal());
     }
 
@@ -189,6 +208,7 @@ public final class ModelPartGpuMetrics {
     }
 
     void pipelineInstances(ModelPartPipelineDescriptor descriptor, int instances, int maximumBatch) {
+        if (!detailedMetricsEnabled()) return;
         if (descriptor == null) return;
         int i = descriptor.ordinal();
         pipelineInstances.addAndGet(i, instances);
