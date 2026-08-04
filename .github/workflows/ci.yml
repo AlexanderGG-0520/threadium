@@ -33,7 +33,7 @@ jobs:
         run: gradle --no-daemon clean spotlessCheck test build
 
   apply-beta7-runtime-fix:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'fix/beta7-runtime-validation'
     permissions:
       contents: write
     runs-on: ubuntu-latest
