@@ -29,5 +29,8 @@ jobs:
         with:
           gradle-version: "9.6.1"
 
-      - name: Validate and build
-        run: gradle --no-daemon clean spotlessCheck test build
+      - name: Apply Java formatting
+        run: gradle --no-daemon spotlessApply
+
+      - name: Show required formatting patch
+        run: git diff --exit-code
