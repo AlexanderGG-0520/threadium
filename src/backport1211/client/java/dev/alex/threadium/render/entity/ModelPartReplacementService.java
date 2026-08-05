@@ -7,6 +7,7 @@ import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.mixin.accessor.OutlineVertexConsumerAccessor;
 import dev.alex.threadium.mixin.accessor.OverlayVertexConsumerAccessor;
 import dev.alex.threadium.mixin.accessor.VertexConsumersDualAccessor;
+import dev.alex.threadium.render.modelpart.AdaptiveModelPartBatchGate;
 import dev.alex.threadium.render.modelpart.ModelPartDecalTransform1211;
 import dev.alex.threadium.render.modelpart.ModelPartGpuInstanceBackend;
 import dev.alex.threadium.render.modelpart.material.MaterialContextResolution;
@@ -21,6 +22,7 @@ import dev.alex.threadium.render.modelpart.replay.ModelPartVertexReplayCommitter
 import dev.alex.threadium.render.modelpart.replay.PreparedModelPartReplay;
 import dev.alex.threadium.render.modelpart.structure.ImmutableModelPartMesh;
 import dev.alex.threadium.render.modelpart.structure.ModelPartStructureInspector;
+import java.util.ArrayDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.client.MinecraftClient;
@@ -46,10 +48,13 @@ public final class ModelPartReplacementService {
     private final AtomicLong replacementAccepts = new AtomicLong();
     private final AtomicLong replacementFallbacks = new AtomicLong();
     private final AtomicLong replacementFailures = new AtomicLong();
+    private final AdaptiveModelPartBatchGate batchProfitability = new AdaptiveModelPartBatchGate();
+    private final ArrayDeque<Object> renderGroupOwners = new ArrayDeque<>();
     private ModelPartGpuInstanceBackend gpuBackend;
     private long worldGeneration;
     private long resourceGeneration;
     private int renderDepth;
+    private int minimumGroupSubmits = 1;
     private long appliedConfigurationRevision = -1;
     private boolean runtimeEnabled;
     private boolean replacementLogged;
@@ -98,6 +103,8 @@ public final class ModelPartReplacementService {
             }
         }
         current.renderDepth = 0;
+        current.renderGroupOwners.clear();
+        current.batchProfitability.beginFrame();
         current.poseInspector.beginFrame();
         current.materialTracker.beginFrame();
     }
@@ -111,6 +118,25 @@ public final class ModelPartReplacementService {
         } catch (RuntimeException exception) {
             current.disableAfterFailure("material provider registration", exception);
         }
+    }
+
+    public static void beginRenderGroup(Object groupOwner) {
+        ModelPartReplacementService current = instance;
+        if (current == null || !current.runtimeEnabled || groupOwner == null || !current.isRenderThread()) return;
+        current.renderGroupOwners.addLast(groupOwner);
+    }
+
+    public static void endRenderGroup(Object groupOwner) {
+        ModelPartReplacementService current = instance;
+        if (current == null || !current.runtimeEnabled || groupOwner == null || !current.isRenderThread()) return;
+        if (current.renderGroupOwners.isEmpty() || current.renderGroupOwners.getLast() != groupOwner) {
+            current.renderGroupOwners.clear();
+            current.disableAfterFailure(
+                    "feature renderer group scope",
+                    new IllegalStateException("Threadium observed an unbalanced Minecraft 1.21.1 render group"));
+            return;
+        }
+        current.renderGroupOwners.removeLast();
     }
 
     public static boolean beginModelPartRender(
@@ -131,7 +157,11 @@ public final class ModelPartReplacementService {
         ModelPartReplacementService current = instance;
         if (current == null || !current.runtimeEnabled || current.gpuBackend == null) return;
         try {
-            current.gpuBackend.flush(provider, layer, current.worldGeneration, current.resourceGeneration);
+            var feedback =
+                    current.gpuBackend.flush(provider, layer, current.worldGeneration, current.resourceGeneration);
+            for (var entry : feedback.entrySet()) {
+                current.batchProfitability.recordFlush(entry.getKey(), entry.getValue());
+            }
         } catch (RuntimeException exception) {
             current.disableAfterFailure("GPU upload or draw", exception);
         }
@@ -195,6 +225,10 @@ public final class ModelPartReplacementService {
         replacementAttempts.incrementAndGet();
         if (!isRenderThread()) return fallback();
 
+        boolean gpuReplacement = gpuConfigured();
+        Object groupOwner = currentRenderGroupOwner();
+        if (gpuReplacement && groupOwner == null) return fallback();
+
         MaterialPath materialPath;
         ImmutableModelPartMesh mesh;
         ImmutableRootRenderTransform rootTransform;
@@ -202,6 +236,11 @@ public final class ModelPartReplacementService {
         try {
             materialPath = resolveMaterialPath(consumer);
             if (materialPath == null) return fallback();
+            if (gpuReplacement
+                    && !batchProfitability.observeAndShouldReplace(
+                            groupOwner, root, materialPath.batchType(), minimumGroupSubmits)) {
+                return fallback();
+            }
             mesh = structureInspector.cached(root);
             if (mesh == null) mesh = structureInspector.captureAndCache(root);
             rootTransform = poseInspector.captureRoot(matrices.peek());
@@ -217,11 +256,12 @@ public final class ModelPartReplacementService {
 
         if (pose.drawVisibleCount() == 0) return accept("empty validated instance");
         if (materialPath.crumbling != null) {
-            if (!gpuConfigured()) return fallback();
+            if (!gpuReplacement) return fallback();
             try {
                 ModelPartGpuInstanceBackend backend = gpuBackend();
                 boolean queued = materialPath.base == null
                         ? backend.queue(
+                                groupOwner,
                                 materialPath.crumbling.provider,
                                 materialPath.crumbling.descriptor,
                                 mesh,
@@ -234,6 +274,7 @@ public final class ModelPartReplacementService {
                                 worldGeneration,
                                 resourceGeneration)
                         : backend.queuePair(
+                                groupOwner,
                                 materialPath.base.provider,
                                 materialPath.base.descriptor,
                                 materialPath.crumbling.provider,
@@ -259,12 +300,13 @@ public final class ModelPartReplacementService {
         }
 
         if (materialPath.outline != null) {
-            if (!gpuConfigured()) return fallback();
+            if (!gpuReplacement) return fallback();
             try {
                 ModelPartGpuInstanceBackend backend = gpuBackend();
                 MaterialBinding outline = materialPath.outline.material;
                 boolean queued = materialPath.base == null
                         ? backend.queue(
+                                groupOwner,
                                 outline.provider,
                                 outline.descriptor,
                                 mesh,
@@ -276,6 +318,7 @@ public final class ModelPartReplacementService {
                                 worldGeneration,
                                 resourceGeneration)
                         : backend.queueOutlinePair(
+                                groupOwner,
                                 materialPath.base.provider,
                                 materialPath.base.descriptor,
                                 outline.provider,
@@ -301,10 +344,11 @@ public final class ModelPartReplacementService {
         }
 
         MaterialBinding material = materialPath.base;
-        if (gpuConfigured()) {
+        if (gpuReplacement) {
             try {
                 if (!gpuBackend()
                         .queue(
+                                groupOwner,
                                 material.provider,
                                 material.descriptor,
                                 mesh,
@@ -416,6 +460,10 @@ public final class ModelPartReplacementService {
                 || descriptor.kind() == RenderLayer1211Descriptor.Kind.OUTLINE_NO_CULL;
     }
 
+    private Object currentRenderGroupOwner() {
+        return renderGroupOwners.isEmpty() ? null : renderGroupOwners.getLast();
+    }
+
     private boolean accept(String path) {
         replacementAccepts.incrementAndGet();
         if (!replacementLogged) {
@@ -464,6 +512,8 @@ public final class ModelPartReplacementService {
         structureInspector.clear();
         poseInspector.clear();
         materialTracker.clearLifecycle();
+        batchProfitability.clear();
+        renderGroupOwners.clear();
         renderDepth = 0;
         if (gpuBackend == null) return;
         if (closeGpu) {
@@ -478,9 +528,12 @@ public final class ModelPartReplacementService {
         ThreadiumConfig config = ThreadiumRuntimeConfig.current();
         appliedConfigurationRevision = ThreadiumRuntimeConfig.revision();
         runtimeEnabled = config.replacementEnabled();
+        minimumGroupSubmits = config.gpuMinimumGroupSubmits();
         structureInspector.clear();
         poseInspector.clear();
         materialTracker.clearLifecycle();
+        batchProfitability.clear();
+        renderGroupOwners.clear();
         renderDepth = 0;
         if (gpuBackend != null) {
             if (isRenderThread()) gpuBackend.close();
@@ -518,7 +571,13 @@ public final class ModelPartReplacementService {
             MaterialBinding base,
             MaterialBinding crumbling,
             OutlineBinding outline,
-            ModelPartDecalTransform1211 decal) {}
+            ModelPartDecalTransform1211 decal) {
+        private RenderLayer batchType() {
+            if (base != null) return base.descriptor.layer();
+            if (crumbling != null) return crumbling.descriptor.layer();
+            return outline == null ? null : outline.material.descriptor.layer();
+        }
+    }
 
     public record Diagnostics(
             boolean configured,

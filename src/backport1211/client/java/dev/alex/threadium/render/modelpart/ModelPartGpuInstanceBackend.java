@@ -76,6 +76,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     }
 
     public boolean queue(
+            Object groupOwner,
             Object provider,
             RenderLayer1211Descriptor descriptor,
             ImmutableModelPartMesh mesh,
@@ -87,6 +88,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             long worldGeneration,
             long resourceGeneration) {
         return queue(
+                groupOwner,
                 provider,
                 descriptor,
                 mesh,
@@ -101,6 +103,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     }
 
     public boolean queue(
+            Object groupOwner,
             Object provider,
             RenderLayer1211Descriptor descriptor,
             ImmutableModelPartMesh mesh,
@@ -113,7 +116,10 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             long worldGeneration,
             long resourceGeneration) {
         requireOpenRenderThread();
-        if (!validGeometry(mesh, pose, root, 1) || !validMaterial(provider, descriptor, decal) || !ensureReady()) {
+        if (groupOwner == null
+                || !validGeometry(mesh, pose, root, 1)
+                || !validMaterial(provider, descriptor, decal)
+                || !ensureReady()) {
             return false;
         }
         MeshHandle handle = meshHandle(mesh);
@@ -121,6 +127,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         append(
                 provider,
                 new Entry(
+                        groupOwner,
                         handle,
                         descriptor,
                         pose,
@@ -135,6 +142,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     }
 
     public boolean queuePair(
+            Object groupOwner,
             Object baseProvider,
             RenderLayer1211Descriptor baseDescriptor,
             Object crumblingProvider,
@@ -149,7 +157,8 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             long worldGeneration,
             long resourceGeneration) {
         requireOpenRenderThread();
-        if (!validGeometry(mesh, pose, root, 2)
+        if (groupOwner == null
+                || !validGeometry(mesh, pose, root, 2)
                 || !validMaterial(baseProvider, baseDescriptor, null)
                 || !validMaterial(crumblingProvider, crumblingDescriptor, decal)
                 || !ensureReady()) {
@@ -158,8 +167,19 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         MeshHandle handle = meshHandle(mesh);
         if (handle == null) return false;
         Entry base = new Entry(
-                handle, baseDescriptor, pose, root, light, overlay, color, null, worldGeneration, resourceGeneration);
+                groupOwner,
+                handle,
+                baseDescriptor,
+                pose,
+                root,
+                light,
+                overlay,
+                color,
+                null,
+                worldGeneration,
+                resourceGeneration);
         Entry crumbling = new Entry(
+                groupOwner,
                 handle,
                 crumblingDescriptor,
                 pose,
@@ -175,6 +195,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     }
 
     public boolean queueOutlinePair(
+            Object groupOwner,
             Object baseProvider,
             RenderLayer1211Descriptor baseDescriptor,
             Object outlineProvider,
@@ -189,7 +210,8 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             long worldGeneration,
             long resourceGeneration) {
         requireOpenRenderThread();
-        if (!validGeometry(mesh, pose, root, 2)
+        if (groupOwner == null
+                || !validGeometry(mesh, pose, root, 2)
                 || !validMaterial(baseProvider, baseDescriptor, null)
                 || !validMaterial(outlineProvider, outlineDescriptor, null)
                 || !isOutline(outlineDescriptor)
@@ -199,6 +221,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         MeshHandle handle = meshHandle(mesh);
         if (handle == null) return false;
         Entry base = new Entry(
+                groupOwner,
                 handle,
                 baseDescriptor,
                 pose,
@@ -210,6 +233,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                 worldGeneration,
                 resourceGeneration);
         Entry outline = new Entry(
+                groupOwner,
                 handle,
                 outlineDescriptor,
                 pose,
@@ -315,13 +339,13 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         while (entries.size() > size) entries.removeLast();
     }
 
-    public boolean flush(
+    public IdentityHashMap<Object, ModelPartFlushStats> flush(
             Object provider, RenderLayer layer, long currentWorldGeneration, long currentResourceGeneration) {
         requireOpenRenderThread();
         IdentityHashMap<RenderLayer, Batch> providerBatches = queued.get(provider);
-        if (providerBatches == null) return false;
+        if (providerBatches == null) return new IdentityHashMap<>();
         Batch batch = providerBatches.remove(layer);
-        if (batch == null) return false;
+        if (batch == null) return new IdentityHashMap<>();
         if (providerBatches.isEmpty()) queued.remove(provider);
         queuedInstances -= batch.entries.size();
         for (Entry entry : batch.entries) {
@@ -331,8 +355,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                 throw new IllegalStateException("Threadium rejected a stale Minecraft 1.21.1 GPU submission");
             }
         }
-        drawBatch(layer, batch.entries);
-        return true;
+        return drawBatch(layer, batch.entries);
     }
 
     public void verifyFrameDrained() {
@@ -507,8 +530,8 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         }
     }
 
-    private void drawBatch(RenderLayer layer, ArrayList<Entry> entries) {
-        if (entries.isEmpty() || !states.state().accepts()) return;
+    private IdentityHashMap<Object, ModelPartFlushStats> drawBatch(RenderLayer layer, ArrayList<Entry> entries) {
+        if (entries.isEmpty() || !states.state().accepts()) return new IdentityHashMap<>();
         int entryCount = entries.size();
         IdentityHashMap<ImmutableModelPartBonePose, Integer> boneBases = new IdentityHashMap<>();
         ArrayList<ImmutableModelPartBonePose> palette = new ArrayList<>();
@@ -536,9 +559,13 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
 
         int[] sourceIndices = new int[entryCount];
         Object[] keys = new Object[entryCount];
+        IdentityHashMap<Object, IdentityHashMap<MeshHandle, Object>> groupMeshKeys = new IdentityHashMap<>();
         for (int index = 0; index < entryCount; index++) {
             sourceIndices[index] = index;
-            keys[index] = entries.get(index).mesh;
+            Entry entry = entries.get(index);
+            keys[index] = groupMeshKeys
+                    .computeIfAbsent(entry.groupOwner, ignored -> new IdentityHashMap<>())
+                    .computeIfAbsent(entry.mesh, ignored -> new Object());
         }
         RenderLayer1211Descriptor descriptor = entries.getFirst().descriptor;
         boolean crumbling = descriptor.kind() == RenderLayer1211Descriptor.Kind.CRUMBLING;
@@ -569,6 +596,36 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         instances.flip();
         if (decals != null) decals.flip();
         ArrayList<SortedModelPartQuads.Reference> sortedReferences = sorted ? collectSortedReferences(entries) : null;
+        IdentityHashMap<Object, MutableFlushStats> mutableFeedback = new IdentityHashMap<>();
+        for (Entry entry : entries) {
+            MutableFlushStats stats =
+                    mutableFeedback.computeIfAbsent(entry.groupOwner, ignored -> new MutableFlushStats());
+            stats.instances++;
+            if (sorted) stats.sortedInstances++;
+            else stats.batchableInstances++;
+        }
+        if (sorted) {
+            for (SortedModelPartQuads.Reference reference : sortedReferences) {
+                MutableFlushStats stats = mutableFeedback.get(entries.get(reference.sourceIndex()).groupOwner);
+                stats.drawCalls++;
+                stats.sortedDrawCalls++;
+                stats.maximumInstancesPerDraw = Math.max(stats.maximumInstancesPerDraw, 1);
+            }
+        } else {
+            for (int batch = 0; batch < plan.batchCount(); batch++) {
+                Entry representative = entries.get(plan.representativeSourceIndices()[batch]);
+                int instanceCount = plan.instanceCounts()[batch];
+                MutableFlushStats stats = mutableFeedback.get(representative.groupOwner);
+                stats.drawCalls++;
+                stats.batchableDrawCalls++;
+                stats.maximumInstancesPerDraw = Math.max(stats.maximumInstancesPerDraw, instanceCount);
+                if (instanceCount == 1) stats.singletonBatches++;
+                else {
+                    stats.multiInstanceBatches++;
+                    stats.totalInstancesInMultiDraws += instanceCount;
+                }
+            }
+        }
 
         OpenGlStateSnapshot1211 previous = OpenGlStateSnapshot1211.capture();
         boolean layerStarted = false;
@@ -647,6 +704,10 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             if (layerStarted) layer.endDrawing();
             previous.restore();
         }
+        IdentityHashMap<Object, ModelPartFlushStats> feedback = new IdentityHashMap<>();
+        for (var entry : mutableFeedback.entrySet())
+            feedback.put(entry.getKey(), entry.getValue().freeze());
+        return feedback;
     }
 
     private static ArrayList<SortedModelPartQuads.Reference> collectSortedReferences(ArrayList<Entry> entries) {
@@ -896,11 +957,43 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         return shader;
     }
 
+    private static final class MutableFlushStats {
+        private int instances;
+        private int drawCalls;
+        private int batchableInstances;
+        private int batchableDrawCalls;
+        private int sortedInstances;
+        private int sortedDrawCalls;
+        private int singletonBatches;
+        private int multiInstanceBatches;
+        private int maximumInstancesPerDraw;
+        private int totalInstancesInMultiDraws;
+
+        private ModelPartFlushStats freeze() {
+            return new ModelPartFlushStats(
+                    instances,
+                    drawCalls,
+                    batchableInstances,
+                    batchableDrawCalls,
+                    sortedInstances,
+                    sortedDrawCalls,
+                    singletonBatches,
+                    multiInstanceBatches,
+                    maximumInstancesPerDraw,
+                    totalInstancesInMultiDraws,
+                    0,
+                    0,
+                    0,
+                    0);
+        }
+    }
+
     private static final class Batch {
         private final ArrayList<Entry> entries = new ArrayList<>();
     }
 
     private record Entry(
+            Object groupOwner,
             MeshHandle mesh,
             RenderLayer1211Descriptor descriptor,
             ImmutableModelPartBonePose pose,
