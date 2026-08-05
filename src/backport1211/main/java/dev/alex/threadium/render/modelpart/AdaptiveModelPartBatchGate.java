@@ -7,18 +7,20 @@ import java.util.IdentityHashMap;
  * Frame-delayed exact-identity profitability predictor.
  *
  * <p>The current frame is observed only. A candidate becomes eligible in the next frame when the same stable feature
- * renderer, renderer-owned model root, and RenderType reached the configured minimum. Actual flush efficiency feeds a
- * short cooldown: groups that produced mostly singleton draws temporarily return to vanilla instead of repeatedly
- * paying pose packing, upload, and render-pass overhead without reducing draw calls.
+ * renderer, renderer-owned model root, and render-layer identity reached the configured minimum. Actual flush
+ * efficiency feeds a short cooldown: groups that produced mostly singleton draws temporarily return to vanilla instead
+ * of repeatedly paying pose packing, upload, and render-pass overhead without reducing draw calls.
  */
-final class AdaptiveModelPartBatchGate {
+public final class AdaptiveModelPartBatchGate {
     static final int UNPROFITABLE_COOLDOWN_FRAMES = 30;
+
+    public AdaptiveModelPartBatchGate() {}
 
     private Table previous = new Table();
     private Table current = new Table();
     private final IdentityHashMap<Object, GroupFeedback> feedback = new IdentityHashMap<>();
 
-    void beginFrame() {
+    public void beginFrame() {
         Table swap = previous;
         previous = current;
         current = swap;
@@ -26,7 +28,7 @@ final class AdaptiveModelPartBatchGate {
         for (GroupFeedback state : feedback.values()) state.beginFrame();
     }
 
-    boolean observeAndShouldReplace(Object groupOwner, Object modelRoot, Object type, int minimumInstances) {
+    public boolean observeAndShouldReplace(Object groupOwner, Object modelRoot, Object type, int minimumInstances) {
         if (groupOwner == null || modelRoot == null || type == null) return false;
         current.increment(groupOwner, modelRoot, type);
         if (minimumInstances <= 1) return true;
@@ -35,7 +37,7 @@ final class AdaptiveModelPartBatchGate {
                 && previous.count(groupOwner, modelRoot, type) >= minimumInstances;
     }
 
-    void recordFlush(Object groupOwner, ModelPartFlushStats stats) {
+    public void recordFlush(Object groupOwner, ModelPartFlushStats stats) {
         if (groupOwner == null || stats == null || stats.instances() <= 0) return;
         int instances = stats.batchableInstances();
         int draws = stats.batchableDrawCalls();
@@ -53,7 +55,7 @@ final class AdaptiveModelPartBatchGate {
         }
     }
 
-    void clear() {
+    public void clear() {
         previous.clear();
         current.clear();
         feedback.clear();
@@ -100,7 +102,7 @@ final class AdaptiveModelPartBatchGate {
             }
         }
 
-        void clear() {
+        public void clear() {
             Arrays.fill(groups, null);
             Arrays.fill(roots, null);
             Arrays.fill(types, null);
