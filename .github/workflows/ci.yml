@@ -3,10 +3,11 @@ name: CI
 on:
   push:
     branches:
-      - mc1.21.1/fabric/dev
+      - agent/mc1201-backport
+      - mc1.20.1/fabric/dev
   pull_request:
     branches:
-      - mc1.21.1/fabric/dev
+      - mc1.20.1/fabric/dev
   workflow_dispatch:
 
 permissions:
@@ -20,16 +21,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 25
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: zulu
-          java-version: "25"
+          java-version: "17"
 
       - name: Set up Gradle 9.6.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.6.1"
 
-      - name: Validate Java 21 backport
+      - name: Validate Java 17 backport
         run: gradle --no-daemon clean spotlessApply spotlessCheck test build
