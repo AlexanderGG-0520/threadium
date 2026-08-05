@@ -10,7 +10,7 @@ import net.minecraft.client.render.RenderLayer;
 import net.minecraft.util.Identifier;
 
 /**
- * Exact Minecraft 1.21.1 descriptor for the first replacement-safe material subset.
+ * Exact Minecraft 1.20.1 descriptor for the first replacement-safe material subset.
  *
  * <p>The accepted shape is Vanilla {@code entity_cutout_no_cull} with a single non-blurred, non-mipmapped texture.
  * Every non-texture phase must be the same canonical phase object as Vanilla's template. Unknown, modded, wrapped,
@@ -18,7 +18,7 @@ import net.minecraft.util.Identifier;
  */
 public record RenderLayer1211Descriptor(
         RenderLayer layer, Identifier texture, ReplacementAdmissionPolicy admissionPolicy) {
-    private static final Identifier TEMPLATE_TEXTURE = Identifier.of("threadium", "replacement_probe");
+    private static final Identifier TEMPLATE_TEXTURE = new Identifier("threadium", "replacement_probe");
     private static final RenderLayer ENTITY_CUTOUT_NO_CULL_TEMPLATE =
             RenderLayer.getEntityCutoutNoCull(TEMPLATE_TEXTURE);
 
@@ -75,8 +75,8 @@ public record RenderLayer1211Descriptor(
         }
         Object actualTexturePhase = actual.threadium$getTexturePhase();
         Object templateTexturePhase = template.threadium$getTexturePhase();
-        if (actualPhases.getFirst() != actualTexturePhase
-                || templatePhases.getFirst() != templateTexturePhase
+        if (actualPhases.get(0) != actualTexturePhase
+                || templatePhases.get(0) != templateTexturePhase
                 || actualTexturePhase.getClass() != templateTexturePhase.getClass()) {
             return LayerInspection.unsupported();
         }
