@@ -42,10 +42,14 @@ jobs:
           mkdir -p build/reference-26.2
           git fetch --no-tags --depth=1 origin mc26.2/fabric/dev
           git archive origin/mc26.2/fabric/dev \
+            src/main/java/dev/alex/threadium \
+            src/main/resources \
             src/client/java/dev/alex/threadium \
             src/client/resources \
             src/test/java/dev/alex/threadium \
             | tar -x -C build/reference-26.2
+          git show origin/mc26.2/fabric/dev:build.gradle > build/reference-26.2/build.gradle
+          git show origin/mc26.2/fabric/dev:gradle.properties > build/reference-26.2/gradle.properties
 
       - name: Upload validation workspace
         if: always()
