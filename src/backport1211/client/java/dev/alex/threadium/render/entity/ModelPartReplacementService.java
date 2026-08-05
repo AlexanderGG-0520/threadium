@@ -4,6 +4,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import dev.alex.threadium.ThreadiumClient;
 import dev.alex.threadium.config.ThreadiumConfig;
 import dev.alex.threadium.config.ThreadiumRuntimeConfig;
+import dev.alex.threadium.mixin.accessor.OutlineVertexConsumerAccessor;
 import dev.alex.threadium.mixin.accessor.OverlayVertexConsumerAccessor;
 import dev.alex.threadium.mixin.accessor.VertexConsumersDualAccessor;
 import dev.alex.threadium.render.modelpart.ModelPartDecalTransform1211;
@@ -257,6 +258,48 @@ public final class ModelPartReplacementService {
             }
         }
 
+        if (materialPath.outline != null) {
+            if (!gpuConfigured()) return fallback();
+            try {
+                ModelPartGpuInstanceBackend backend = gpuBackend();
+                MaterialBinding outline = materialPath.outline.material;
+                boolean queued = materialPath.base == null
+                        ? backend.queue(
+                                outline.provider,
+                                outline.descriptor,
+                                mesh,
+                                pose,
+                                rootTransform,
+                                light,
+                                overlay,
+                                materialPath.outline.color,
+                                worldGeneration,
+                                resourceGeneration)
+                        : backend.queueOutlinePair(
+                                materialPath.base.provider,
+                                materialPath.base.descriptor,
+                                outline.provider,
+                                outline.descriptor,
+                                mesh,
+                                pose,
+                                rootTransform,
+                                light,
+                                overlay,
+                                color,
+                                materialPath.outline.color,
+                                worldGeneration,
+                                resourceGeneration);
+                if (!queued) return fallback();
+                return accept(
+                        materialPath.base == null
+                                ? "Threadium-owned outline queue"
+                                : "Threadium-owned atomic base and outline queues");
+            } catch (RuntimeException exception) {
+                disableAfterFailure("outline GPU queue commitment", exception);
+                return false;
+            }
+        }
+
         MaterialBinding material = materialPath.base;
         if (gpuConfigured()) {
             try {
@@ -296,32 +339,49 @@ public final class ModelPartReplacementService {
     private MaterialPath resolveMaterialPath(VertexConsumer consumer) {
         if (consumer instanceof OverlayVertexConsumer overlay) {
             CrumblingBinding crumbling = resolveCrumbling(overlay);
-            return crumbling == null ? null : new MaterialPath(null, crumbling.material, crumbling.decal);
+            return crumbling == null ? null : new MaterialPath(null, crumbling.material, null, crumbling.decal);
+        }
+        if (consumer instanceof OutlineVertexConsumerAccessor) {
+            OutlineBinding outline = resolveOutline(consumer);
+            return outline == null ? null : new MaterialPath(null, null, outline, null);
         }
         if (consumer instanceof VertexConsumersDualAccessor dual) {
             VertexConsumer first = dual.threadium$getFirst();
             VertexConsumer second = dual.threadium$getSecond();
-            boolean firstOverlay = first instanceof OverlayVertexConsumer;
-            boolean secondOverlay = second instanceof OverlayVertexConsumer;
-            if (firstOverlay == secondOverlay) return null;
-            OverlayVertexConsumer overlay = (OverlayVertexConsumer) (firstOverlay ? first : second);
-            VertexConsumer baseConsumer = firstOverlay ? second : first;
-            CrumblingBinding crumbling = resolveCrumbling(overlay);
-            MaterialBinding base = resolveDirect(baseConsumer);
-            if (crumbling == null
-                    || base == null
-                    || base.descriptor.kind() == RenderLayer1211Descriptor.Kind.CRUMBLING) {
-                return null;
+            boolean firstCrumbling = first instanceof OverlayVertexConsumer;
+            boolean secondCrumbling = second instanceof OverlayVertexConsumer;
+            boolean firstOutline = first instanceof OutlineVertexConsumerAccessor;
+            boolean secondOutline = second instanceof OutlineVertexConsumerAccessor;
+            if (firstCrumbling != secondCrumbling && !firstOutline && !secondOutline) {
+                OverlayVertexConsumer overlay = (OverlayVertexConsumer) (firstCrumbling ? first : second);
+                VertexConsumer baseConsumer = firstCrumbling ? second : first;
+                CrumblingBinding crumbling = resolveCrumbling(overlay);
+                MaterialBinding base = resolveDirect(baseConsumer);
+                if (crumbling == null
+                        || base == null
+                        || base.descriptor.kind() == RenderLayer1211Descriptor.Kind.CRUMBLING) {
+                    return null;
+                }
+                return new MaterialPath(base, crumbling.material, null, crumbling.decal);
             }
-            return new MaterialPath(base, crumbling.material, crumbling.decal);
+            if (firstOutline != secondOutline && !firstCrumbling && !secondCrumbling) {
+                VertexConsumer outlineConsumer = firstOutline ? first : second;
+                VertexConsumer baseConsumer = firstOutline ? second : first;
+                OutlineBinding outline = resolveOutline(outlineConsumer);
+                MaterialBinding base = resolveDirect(baseConsumer);
+                if (outline == null || base == null || isOutline(base.descriptor)) return null;
+                return new MaterialPath(base, null, outline, null);
+            }
+            return null;
         }
         MaterialBinding direct = resolveDirect(consumer);
         if (direct == null
                 || direct.descriptor.kind() == RenderLayer1211Descriptor.Kind.CRUMBLING
+                || isOutline(direct.descriptor)
                 || !ModelPartVertexReplayCommitter.supports(consumer)) {
             return null;
         }
-        return new MaterialPath(direct, null, null);
+        return new MaterialPath(direct, null, null, null);
     }
 
     private MaterialBinding resolveDirect(VertexConsumer consumer) {
@@ -339,6 +399,21 @@ public final class ModelPartReplacementService {
                 accessor.threadium$getInverseNormalMatrix(),
                 accessor.threadium$getTextureScale());
         return decal.finite() ? new CrumblingBinding(material, decal) : null;
+    }
+
+    private OutlineBinding resolveOutline(VertexConsumer consumer) {
+        if (!(consumer instanceof OutlineVertexConsumerAccessor accessor)) return null;
+        MaterialContextResolution<Object, RenderLayer> resolution =
+                materialTracker.observeResolution(accessor.threadium$getDelegate());
+        RenderLayer1211Descriptor descriptor = RenderLayer1211Descriptor.inspectOutline(resolution);
+        if (!descriptor.replacementSafe() || !isOutline(descriptor)) return null;
+        return new OutlineBinding(
+                new MaterialBinding(resolution.provider(), descriptor), accessor.threadium$getColor());
+    }
+
+    private static boolean isOutline(RenderLayer1211Descriptor descriptor) {
+        return descriptor.kind() == RenderLayer1211Descriptor.Kind.OUTLINE_CULL
+                || descriptor.kind() == RenderLayer1211Descriptor.Kind.OUTLINE_NO_CULL;
     }
 
     private boolean accept(String path) {
@@ -437,7 +512,13 @@ public final class ModelPartReplacementService {
 
     private record CrumblingBinding(MaterialBinding material, ModelPartDecalTransform1211 decal) {}
 
-    private record MaterialPath(MaterialBinding base, MaterialBinding crumbling, ModelPartDecalTransform1211 decal) {}
+    private record OutlineBinding(MaterialBinding material, int color) {}
+
+    private record MaterialPath(
+            MaterialBinding base,
+            MaterialBinding crumbling,
+            OutlineBinding outline,
+            ModelPartDecalTransform1211 decal) {}
 
     public record Diagnostics(
             boolean configured,

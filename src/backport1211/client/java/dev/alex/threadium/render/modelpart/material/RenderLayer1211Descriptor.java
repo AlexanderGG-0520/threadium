@@ -25,6 +25,16 @@ public record RenderLayer1211Descriptor(
     }
 
     public static RenderLayer1211Descriptor inspect(MaterialContextResolution<Object, RenderLayer> resolution) {
+        return inspect(resolution, false);
+    }
+
+    /** Classifies an outline delegate only after its wrapper color and underlying Immediate drawer are proven. */
+    public static RenderLayer1211Descriptor inspectOutline(MaterialContextResolution<Object, RenderLayer> resolution) {
+        return inspect(resolution, true);
+    }
+
+    private static RenderLayer1211Descriptor inspect(
+            MaterialContextResolution<Object, RenderLayer> resolution, boolean outlineInputsResolved) {
         Objects.requireNonNull(resolution, "resolution");
         RenderLayer layer = resolution.layer();
         Inspection inspection = inspectLayer(layer);
@@ -37,9 +47,13 @@ public record RenderLayer1211Descriptor(
                 kind != Kind.UNSUPPORTED,
                 inspection.inputsResolved,
                 supported,
-                kind != Kind.OUTLINE_NO_CULL && kind != Kind.OUTLINE_CULL);
+                !isOutline(kind) || outlineInputsResolved);
         return new RenderLayer1211Descriptor(
                 layer, inspection.texture, kind, kind.shaderMode, kind.submissionPolicy, kind.alphaCutout, policy);
+    }
+
+    private static boolean isOutline(Kind kind) {
+        return kind == Kind.OUTLINE_CULL || kind == Kind.OUTLINE_NO_CULL;
     }
 
     public boolean replacementSafe() {
@@ -174,8 +188,8 @@ public record RenderLayer1211Descriptor(
         WATER_MASK(ShaderMode.WATER_MASK, SubmissionPolicy.OPAQUE_BATCHED, false, true),
         GLINT(ShaderMode.GLINT, SubmissionPolicy.ORDERED_ADJACENT_BATCHED, true, true),
         CRUMBLING(ShaderMode.CRUMBLING, SubmissionPolicy.SORTED_QUAD_STREAM, true, true),
-        OUTLINE_CULL(ShaderMode.OUTLINE, SubmissionPolicy.ORDERED_ADJACENT_BATCHED, false, false),
-        OUTLINE_NO_CULL(ShaderMode.OUTLINE, SubmissionPolicy.ORDERED_ADJACENT_BATCHED, false, false),
+        OUTLINE_CULL(ShaderMode.OUTLINE, SubmissionPolicy.ORDERED_ADJACENT_BATCHED, false, true),
+        OUTLINE_NO_CULL(ShaderMode.OUTLINE, SubmissionPolicy.ORDERED_ADJACENT_BATCHED, false, true),
         UNSUPPORTED(ShaderMode.LIT_OVERLAY, SubmissionPolicy.SINGLETON_ONLY, true, false);
 
         private final ShaderMode shaderMode;

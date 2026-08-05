@@ -174,6 +174,61 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         return true;
     }
 
+    public boolean queueOutlinePair(
+            Object baseProvider,
+            RenderLayer1211Descriptor baseDescriptor,
+            Object outlineProvider,
+            RenderLayer1211Descriptor outlineDescriptor,
+            ImmutableModelPartMesh mesh,
+            ImmutableModelPartBonePose pose,
+            ImmutableRootRenderTransform root,
+            int light,
+            int overlay,
+            int baseColor,
+            int outlineColor,
+            long worldGeneration,
+            long resourceGeneration) {
+        requireOpenRenderThread();
+        if (!validGeometry(mesh, pose, root, 2)
+                || !validMaterial(baseProvider, baseDescriptor, null)
+                || !validMaterial(outlineProvider, outlineDescriptor, null)
+                || !isOutline(outlineDescriptor)
+                || !ensureReady()) {
+            return false;
+        }
+        MeshHandle handle = meshHandle(mesh);
+        if (handle == null) return false;
+        Entry base = new Entry(
+                handle,
+                baseDescriptor,
+                pose,
+                root,
+                light,
+                overlay,
+                baseColor,
+                null,
+                worldGeneration,
+                resourceGeneration);
+        Entry outline = new Entry(
+                handle,
+                outlineDescriptor,
+                pose,
+                root,
+                light,
+                overlay,
+                outlineColor,
+                null,
+                worldGeneration,
+                resourceGeneration);
+        appendPair(baseProvider, base, outlineProvider, outline);
+        return true;
+    }
+
+    private static boolean isOutline(RenderLayer1211Descriptor descriptor) {
+        return descriptor.kind() == RenderLayer1211Descriptor.Kind.OUTLINE_CULL
+                || descriptor.kind() == RenderLayer1211Descriptor.Kind.OUTLINE_NO_CULL;
+    }
+
     private boolean validGeometry(
             ImmutableModelPartMesh mesh,
             ImmutableModelPartBonePose pose,

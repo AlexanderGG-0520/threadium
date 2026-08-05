@@ -9,6 +9,7 @@
     "VertexConsumerProviderImmediateMixin",
     "accessor.MatrixStackEntryAccessor",
     "accessor.ModelPartAccessor",
+    "accessor.OutlineVertexConsumerAccessor",
     "accessor.OverlayVertexConsumerAccessor",
     "accessor.RenderLayerMultiPhaseAccessor",
     "accessor.RenderLayerMultiPhaseParametersAccessor",
