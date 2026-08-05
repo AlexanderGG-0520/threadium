@@ -2,7 +2,7 @@ package dev.alex.threadium.render.entity;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.alex.threadium.ThreadiumClient;
-import dev.alex.threadium.render.modelpart.gpu.ModelPartGpuReplayBackend;
+import dev.alex.threadium.render.modelpart.ModelPartGpuInstanceBackend;
 import dev.alex.threadium.render.modelpart.material.MaterialContextResolution;
 import dev.alex.threadium.render.modelpart.material.MaterialProviderSource;
 import dev.alex.threadium.render.modelpart.material.ModelPartMaterialContextTracker;
@@ -24,12 +24,11 @@ import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.util.math.MatrixStack;
 
 /**
- * First fail-closed Minecraft 1.21.1 replacement path.
+ * Fail-closed Minecraft 1.21.1 replacement service.
  *
- * <p>It replaces only exact {@code entity_cutout_no_cull} draws that resolve directly from a trusted provider to the
- * exact Vanilla BufferBuilder. Geometry is completely transformed and validated before either the destination
- * consumer is mutated or a Threadium-owned GPU batch is committed. Both replacement modes remain opt-in until
- * real-machine visual validation is complete.
+ * <p>The GPU path queues immutable mesh, bone-pose, root-transform, light, overlay, and tint data directly. It does not
+ * construct the CPU-expanded replay stream. The existing exact replay path remains available as a fail-closed fallback
+ * while the legacy OpenGL instancing backend is brought to feature parity.
  */
 public final class ModelPartReplacementService {
     private static final boolean CONFIGURED = Boolean.getBoolean("threadium.backport1211.replacement");
@@ -46,7 +45,7 @@ public final class ModelPartReplacementService {
     private final AtomicLong replacementAccepts = new AtomicLong();
     private final AtomicLong replacementFallbacks = new AtomicLong();
     private final AtomicLong replacementFailures = new AtomicLong();
-    private ModelPartGpuReplayBackend gpuBackend;
+    private ModelPartGpuInstanceBackend gpuBackend;
     private long worldGeneration;
     private long resourceGeneration;
     private int renderDepth;
@@ -65,7 +64,7 @@ public final class ModelPartReplacementService {
     }
 
     public static boolean gpuConfigured() {
-        return CONFIGURED && ModelPartGpuReplayBackend.configured();
+        return CONFIGURED && ModelPartGpuInstanceBackend.configured();
     }
 
     public static void beginFrame() {
@@ -124,7 +123,7 @@ public final class ModelPartReplacementService {
         ModelPartReplacementService current = instance;
         if (current == null || !current.runtimeEnabled || current.gpuBackend == null) return;
         try {
-            current.gpuBackend.flush(provider, layer);
+            current.gpuBackend.flush(provider, layer, current.worldGeneration, current.resourceGeneration);
         } catch (RuntimeException exception) {
             current.disableAfterFailure("GPU upload or draw", exception);
         }
@@ -149,8 +148,18 @@ public final class ModelPartReplacementService {
 
     public static Diagnostics diagnostics() {
         ModelPartReplacementService current = instance;
-        ModelPartGpuReplayBackend.Diagnostics gpu = current == null || current.gpuBackend == null
-                ? new ModelPartGpuReplayBackend.Diagnostics(0, 0, 0, 0, 0)
+        ModelPartGpuInstanceBackend.Diagnostics gpu = current == null || current.gpuBackend == null
+                ? new ModelPartGpuInstanceBackend.Diagnostics(
+                        dev.alex.threadium.render.modelpart.ModelPartBackendState.UNINITIALIZED,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0)
                 : current.gpuBackend.diagnostics();
         return current == null
                 ? new Diagnostics(CONFIGURED, gpuConfigured(), false, 0, 0, 0, 0, gpu)
@@ -172,38 +181,55 @@ public final class ModelPartReplacementService {
 
         MaterialContextResolution<Object, RenderLayer> material;
         RenderLayer1211Descriptor descriptor;
-        PreparedModelPartReplay replay;
+        ImmutableModelPartMesh mesh;
+        ImmutableRootRenderTransform rootTransform;
+        ImmutableModelPartBonePose pose;
         try {
             material = materialTracker.observeResolution(consumer);
             descriptor = RenderLayer1211Descriptor.inspect(material);
             if (!descriptor.replacementSafe() || !ModelPartVertexReplayCommitter.supports(consumer)) {
                 return fallback();
             }
-            ImmutableModelPartMesh mesh = structureInspector.cached(root);
+            mesh = structureInspector.cached(root);
             if (mesh == null) mesh = structureInspector.captureAndCache(root);
-            ImmutableRootRenderTransform rootTransform = poseInspector.captureRoot(matrices.peek());
-            ImmutableModelPartBonePose pose = poseInspector.capturePose(root, mesh).pose();
-            ModelPartInvocationSnapshot invocation = new ModelPartInvocationSnapshot(
-                    mesh, pose, rootTransform, light, overlay, color, worldGeneration, resourceGeneration);
-            replay = PreparedModelPartReplay.prepare(invocation);
+            rootTransform = poseInspector.captureRoot(matrices.peek());
+            pose = poseInspector.capturePose(root, mesh).pose();
+            if (!pose.finite() || !rootTransform.finite() || pose.boneCount() != mesh.partCount()) {
+                throw new IllegalArgumentException("ModelPart instance input is not finite or structurally aligned");
+            }
         } catch (RuntimeException exception) {
             replacementFailures.incrementAndGet();
             warnFailureOnce("preparation", exception);
             return fallback();
         }
 
-        if (replay.vertexCount() == 0) return accept("empty validated replay");
+        if (pose.drawVisibleCount() == 0) return accept("empty validated instance");
         if (gpuConfigured()) {
             try {
-                if (!gpuBackend().queue(material.provider(), descriptor.layer(), replay)) return fallback();
-                return accept("Threadium-owned GPU queue");
+                if (!gpuBackend().queue(
+                        material.provider(),
+                        descriptor.layer(),
+                        mesh,
+                        pose,
+                        rootTransform,
+                        light,
+                        overlay,
+                        color,
+                        worldGeneration,
+                        resourceGeneration)) {
+                    return fallback();
+                }
+                return accept("Threadium-owned GPU instance queue");
             } catch (RuntimeException exception) {
-                disableAfterFailure("GPU queue commitment", exception);
+                disableAfterFailure("GPU instance queue commitment", exception);
                 return false;
             }
         }
 
         try {
+            ModelPartInvocationSnapshot invocation = new ModelPartInvocationSnapshot(
+                    mesh, pose, rootTransform, light, overlay, color, worldGeneration, resourceGeneration);
+            PreparedModelPartReplay replay = PreparedModelPartReplay.prepare(invocation);
             ModelPartVertexReplayCommitter.commit(replay, consumer);
         } catch (RuntimeException exception) {
             disableAfterFailure("destination commit", exception);
@@ -226,8 +252,8 @@ public final class ModelPartReplacementService {
         return false;
     }
 
-    private ModelPartGpuReplayBackend gpuBackend() {
-        if (gpuBackend == null) gpuBackend = new ModelPartGpuReplayBackend();
+    private ModelPartGpuInstanceBackend gpuBackend() {
+        if (gpuBackend == null) gpuBackend = new ModelPartGpuInstanceBackend();
         return gpuBackend;
     }
 
@@ -276,7 +302,9 @@ public final class ModelPartReplacementService {
     }
 
     private void requireRenderThread() {
-        if (!isRenderThread()) throw new IllegalStateException("Threadium replacement state is not on the Render Thread");
+        if (!isRenderThread()) {
+            throw new IllegalStateException("Threadium replacement state is not on the Render Thread");
+        }
     }
 
     public record Diagnostics(
@@ -287,5 +315,5 @@ public final class ModelPartReplacementService {
             long replacementAccepts,
             long replacementFallbacks,
             long replacementFailures,
-            ModelPartGpuReplayBackend.Diagnostics gpu) {}
+            ModelPartGpuInstanceBackend.Diagnostics gpu) {}
 }
