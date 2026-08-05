@@ -47,7 +47,7 @@ jobs:
           done < <(find "$HOME/.gradle/caches/fabric-loom" "$GITHUB_WORKSPACE/.gradle" \
             -type f -name '*.jar' 2>/dev/null | sort -u)
 
-      - name: Upload validation reports
+      - name: Upload validation workspace
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -55,6 +55,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
           path: |
+            src/backport1211
+            build.gradle
+            gradle.properties
+            settings.gradle
             build/minecraft-shader-reference
             build/reports
             build/test-results
