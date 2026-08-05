@@ -1,0 +1,30 @@
+name: Export Minecraft 1.21.1 crumbling workspace
+
+on:
+  pull_request:
+    branches:
+      - mc1.21.1/fabric/dev
+
+permissions:
+  contents: read
+
+jobs:
+  export-workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+
+      - name: Package named source workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip -qr mc1211-crumbling-workspace.zip . -x '.git/*' 'mc1211-crumbling-workspace.zip'
+
+      - name: Upload workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: mc1211-crumbling-workspace
+          path: mc1211-crumbling-workspace.zip
+          retention-days: 1
