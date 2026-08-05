@@ -276,9 +276,6 @@ final class ModelPartVanillaPoseDifferentialTest {
                     value(mesh, vertex, ImmutableModelPartMesh.NORMAL_X),
                     value(mesh, vertex, ImmutableModelPartMesh.NORMAL_Y),
                     value(mesh, vertex, ImmutableModelPartMesh.NORMAL_Z)));
-            if (root.normalNeedsNormalization() || pose.normalNeedsNormalization(bone)) {
-                transformedNormal.normalize();
-            }
             result.add(new CapturedVertex(
                     transformedPosition.x,
                     transformedPosition.y,
