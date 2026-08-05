@@ -114,7 +114,7 @@ class PreparedModelPartReplayTest {
     }
 
     private static float[] identity4() {
-        return new float[] {1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        return new float[] {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     }
 
     private static float[] identity3() {
