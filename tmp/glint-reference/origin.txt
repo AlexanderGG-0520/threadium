@@ -1,0 +1,2 @@
+source_jar=.gradle/loom-cache/minecraftMaven/net/minecraft/minecraft-clientOnly-6c431f37c1/1.21.1-net.fabricmc.yarn.1_21_1.1.21.1+build.3-v2/minecraft-clientOnly-6c431f37c1-1.21.1-net.fabricmc.yarn.1_21_1.1.21.1+build.3-v2-sources.jar
+client_jar=.gradle/loom-cache/minecraftMaven/net/minecraft/minecraft-clientOnly-6c431f37c1/1.21.1-net.fabricmc.yarn.1_21_1.1.21.1+build.3-v2/minecraft-clientOnly-6c431f37c1-1.21.1-net.fabricmc.yarn.1_21_1.1.21.1+build.3-v2.jar

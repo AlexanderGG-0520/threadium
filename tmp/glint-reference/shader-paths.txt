@@ -1,0 +1,16 @@
+assets/minecraft/shaders/core/rendertype_armor_entity_glint.fsh
+assets/minecraft/shaders/core/rendertype_armor_entity_glint.json
+assets/minecraft/shaders/core/rendertype_armor_entity_glint.vsh
+assets/minecraft/shaders/core/rendertype_entity_glint.fsh
+assets/minecraft/shaders/core/rendertype_entity_glint.json
+assets/minecraft/shaders/core/rendertype_entity_glint.vsh
+assets/minecraft/shaders/core/rendertype_entity_glint_direct.fsh
+assets/minecraft/shaders/core/rendertype_entity_glint_direct.json
+assets/minecraft/shaders/core/rendertype_entity_glint_direct.vsh
+assets/minecraft/shaders/core/rendertype_glint.fsh
+assets/minecraft/shaders/core/rendertype_glint.json
+assets/minecraft/shaders/core/rendertype_glint.vsh
+assets/minecraft/shaders/core/rendertype_glint_translucent.fsh
+assets/minecraft/shaders/core/rendertype_glint_translucent.json
+assets/minecraft/shaders/core/rendertype_glint_translucent.vsh
+assets/minecraft/shaders/include/fog.glsl

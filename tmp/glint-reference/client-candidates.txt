@@ -1,0 +1,6 @@
+.gradle/loom-cache/minecraftMaven/net/minecraft/minecraft-clientOnly-6c431f37c1/1.21.1-net.fabricmc.yarn.1_21_1.1.21.1+build.3-v2/minecraft-clientOnly-6c431f37c1-1.21.1-net.fabricmc.yarn.1_21_1.1.21.1+build.3-v2.jar
+/home/runner/.gradle/caches/fabric-loom/1.21.1/minecraft-client-only.jar
+/home/runner/.gradle/caches/fabric-loom/1.21.1/minecraft-client.jar
+/home/runner/.gradle/caches/fabric-loom/1.21.1/net.fabricmc.yarn.1_21_1.1.21.1+build.3-v2/clientOnly-unpicked.jar
+/home/runner/.gradle/caches/fabric-loom/minecraftMaven/net/minecraft/minecraft-clientonly-intermediary/1.21.1-net.fabricmc.yarn.1_21_1.1.21.1+build.3-v2/minecraft-clientonly-intermediary-1.21.1-net.fabricmc.yarn.1_21_1.1.21.1+build.3-v2.jar
+/home/runner/.gradle/caches/fabric-loom/minecraftMaven/net/minecraft/minecraft-clientonly/1.21.1-net.fabricmc.yarn.1_21_1.1.21.1+build.3-v2/minecraft-clientonly-1.21.1-net.fabricmc.yarn.1_21_1.1.21.1+build.3-v2.jar
