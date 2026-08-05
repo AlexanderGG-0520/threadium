@@ -9,6 +9,9 @@
     "VertexConsumerProviderImmediateMixin",
     "accessor.MatrixStackEntryAccessor",
     "accessor.ModelPartAccessor",
+    "accessor.RenderLayerMultiPhaseAccessor",
+    "accessor.RenderLayerMultiPhaseParametersAccessor",
+    "accessor.RenderPhaseTextureAccessor",
     "compat.ImmediatelyFastBatchableBufferSourceMixin"
   ],
   "injectors": {
