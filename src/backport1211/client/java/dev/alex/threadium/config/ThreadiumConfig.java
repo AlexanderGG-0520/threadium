@@ -153,7 +153,9 @@ public record ThreadiumConfig(
 
     public boolean gpuReplacementEnabled() {
         if (!replacementEnabled() || !gpuEntityEnabled || "disabled".equals(gpuBackend)) return false;
-        return Boolean.getBoolean("threadium.backport1211.gpu") || "auto".equals(gpuBackend) || "opengl33".equals(gpuBackend);
+        return Boolean.getBoolean("threadium.backport1211.gpu")
+                || "auto".equals(gpuBackend)
+                || "opengl33".equals(gpuBackend);
     }
 
     private static Path configPath() {
@@ -235,15 +237,24 @@ public record ThreadiumConfig(
             int maxCachedMeshes,
             long maxMeshBytes,
             int metricsIntervalSeconds) {
-        if (minimumGroupSubmits < 1 || minimumGroupSubmits > 65536
-                || maxInstances < 1 || maxInstances > 65536
-                || maxBonesPerModel < 1 || maxBonesPerModel > 1024
-                || maxBonesPerFrame < 1 || maxBonesPerFrame > 1048576
-                || maxVerticesPerMesh < 4 || maxVerticesPerMesh > 4194304
-                || maxIndicesPerMesh < 6 || maxIndicesPerMesh > 6291456
-                || maxCachedMeshes < 1 || maxCachedMeshes > 8192
-                || maxMeshBytes < 1048576L || maxMeshBytes > (1L << 34)
-                || metricsIntervalSeconds < 5 || metricsIntervalSeconds > 3600) {
+        if (minimumGroupSubmits < 1
+                || minimumGroupSubmits > 65536
+                || maxInstances < 1
+                || maxInstances > 65536
+                || maxBonesPerModel < 1
+                || maxBonesPerModel > 1024
+                || maxBonesPerFrame < 1
+                || maxBonesPerFrame > 1048576
+                || maxVerticesPerMesh < 4
+                || maxVerticesPerMesh > 4194304
+                || maxIndicesPerMesh < 6
+                || maxIndicesPerMesh > 6291456
+                || maxCachedMeshes < 1
+                || maxCachedMeshes > 8192
+                || maxMeshBytes < 1048576L
+                || maxMeshBytes > (1L << 34)
+                || metricsIntervalSeconds < 5
+                || metricsIntervalSeconds > 3600) {
             throw new IllegalArgumentException("Threadium configuration values are outside their supported ranges");
         }
     }

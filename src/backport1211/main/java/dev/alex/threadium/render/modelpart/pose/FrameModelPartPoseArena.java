@@ -21,7 +21,8 @@ public final class FrameModelPartPoseArena {
 
     public ModelPartPoseCapture acquire(int boneCount) {
         if (boneCount <= 0) throw new IllegalArgumentException("boneCount must be positive");
-        return buckets.computeIfAbsent(boneCount, count -> new Bucket(count, limits)).acquire();
+        return buckets.computeIfAbsent(boneCount, count -> new Bucket(count, limits))
+                .acquire();
     }
 
     public void beginFrame() {

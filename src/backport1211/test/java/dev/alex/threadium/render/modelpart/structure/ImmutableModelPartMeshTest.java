@@ -3,6 +3,7 @@ package dev.alex.threadium.render.modelpart.structure;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 
@@ -48,6 +49,18 @@ final class ImmutableModelPartMeshTest {
 
         assertEquals(firstKey.hashCode(), secondKey.hashCode());
         assertNotEquals(firstKey, secondKey);
+    }
+
+    @Test
+    void oneQuadCannotReferenceMultipleBones() {
+        ImmutableModelPartMesh source = ModelPartMeshTestFixtures.oneQuadMesh(0);
+        int[] vertexData = source.copyVertexData();
+        vertexData[ImmutableModelPartMesh.VERTEX_STRIDE_INTS + ImmutableModelPartMesh.BONE_INDEX] = 1;
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> ImmutableModelPartMesh.copyOf(
+                        ModelPartMeshTestFixtures.structure(1, 0), vertexData, source.copyIndices()));
     }
 
     @Test

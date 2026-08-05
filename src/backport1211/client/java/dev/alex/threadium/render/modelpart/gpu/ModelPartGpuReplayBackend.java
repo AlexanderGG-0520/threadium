@@ -16,8 +16,8 @@ import net.minecraft.client.render.VertexConsumerProvider;
  * Experimental render-thread-owned GPU backend for the first Minecraft 1.21.1 opaque replacement path.
  *
  * <p>Prepared replays are grouped by the exact Vanilla provider and RenderLayer identity. The provider's private draw
- * boundary flushes the group into a Threadium-owned BufferBuilder, uploads it to a reusable dynamic VBO, and submits
- * it under the exact RenderLayer state.
+ * boundary flushes the group into a Threadium-owned BufferBuilder, uploads it to a reusable dynamic VBO, and submits it
+ * under the exact RenderLayer state.
  */
 public final class ModelPartGpuReplayBackend implements AutoCloseable {
     private static final boolean CONFIGURED = Boolean.getBoolean("threadium.backport1211.gpu");

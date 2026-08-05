@@ -16,8 +16,7 @@ public record ModelPartFlushStats(
         int boneUploadCalls,
         long instanceBytes,
         long boneBytes) {
-    public static final ModelPartFlushStats EMPTY =
-            new ModelPartFlushStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public static final ModelPartFlushStats EMPTY = new ModelPartFlushStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
     public ModelPartFlushStats {
         if (instances < 0

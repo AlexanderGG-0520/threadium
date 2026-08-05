@@ -52,9 +52,7 @@ final class AdaptiveModelPartBatchGateTest {
         gate.beginFrame();
         for (int index = 0; index < 16; index++) assertTrue(gate.observeAndShouldReplace(owner, root, type, 16));
 
-        gate.recordFlush(
-                owner,
-                new ModelPartFlushStats(16, 16, 16, 16, 0, 0, 16, 0, 1, 0, 1, 1, 1536, 1792));
+        gate.recordFlush(owner, new ModelPartFlushStats(16, 16, 16, 16, 0, 0, 16, 0, 1, 0, 1, 1, 1536, 1792));
         assertEquals(AdaptiveModelPartBatchGate.UNPROFITABLE_COOLDOWN_FRAMES, gate.cooldownFrames(owner));
         gate.beginFrame();
         assertFalse(gate.observeAndShouldReplace(owner, root, type, 16));

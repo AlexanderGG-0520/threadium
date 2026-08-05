@@ -28,7 +28,10 @@ class PreparedModelPartReplayTest {
 
     @Test
     void hiddenBonesProduceNoVertices() {
-        assertEquals(0, PreparedModelPartReplay.prepare(invocation(false, 0.0F, 0.0F, false)).vertexCount());
+        assertEquals(
+                0,
+                PreparedModelPartReplay.prepare(invocation(false, 0.0F, 0.0F, false))
+                        .vertexCount());
     }
 
     @Test
@@ -68,8 +71,7 @@ class PreparedModelPartReplayTest {
                 5);
     }
 
-    private static ImmutableModelPartBonePose pose(
-            boolean visible, float translationX, boolean normalizeNormal) {
+    private static ImmutableModelPartBonePose pose(boolean visible, float translationX, boolean normalizeNormal) {
         float[] position = identity4();
         position[12] = translationX;
         float[] normal = identity3();
@@ -84,8 +86,8 @@ class PreparedModelPartReplayTest {
     }
 
     private static ImmutableModelPartMesh mesh() {
-        ModelPartStructureSnapshot structure = ModelPartStructureSnapshot.of(
-                List.of(new ModelPartStructureSnapshot.Node(0, -1, "root", 1)));
+        ModelPartStructureSnapshot structure =
+                ModelPartStructureSnapshot.of(List.of(new ModelPartStructureSnapshot.Node(0, -1, "root", 1)));
         int[] vertices = new int[4 * ImmutableModelPartMesh.VERTEX_STRIDE_INTS];
         setVertex(vertices, 0, 0, 0, 0, 0, 0);
         setVertex(vertices, 1, 1, 0, 0, 1, 0);

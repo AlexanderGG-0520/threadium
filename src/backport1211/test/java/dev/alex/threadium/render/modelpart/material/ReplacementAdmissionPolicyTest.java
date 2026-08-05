@@ -8,17 +8,20 @@ import org.junit.jupiter.api.Test;
 class ReplacementAdmissionPolicyTest {
     @Test
     void exactSupportedImmediateMaterialIsAllowed() {
-        assertTrue(policy(MaterialResolutionStatus.DIRECT_UNIQUE, MaterialProviderSource.IMMEDIATE).allowed());
+        assertTrue(policy(MaterialResolutionStatus.DIRECT_UNIQUE, MaterialProviderSource.IMMEDIATE)
+                .allowed());
     }
 
     @Test
     void exactSupportedImmediatelyFastMaterialIsAllowed() {
-        assertTrue(policy(MaterialResolutionStatus.DIRECT_UNIQUE, MaterialProviderSource.IMMEDIATELY_FAST).allowed());
+        assertTrue(policy(MaterialResolutionStatus.DIRECT_UNIQUE, MaterialProviderSource.IMMEDIATELY_FAST)
+                .allowed());
     }
 
     @Test
     void outlineProviderRequiresSeparateColorAndDrawerProof() {
-        assertFalse(policy(MaterialResolutionStatus.DIRECT_UNIQUE, MaterialProviderSource.OUTLINE).allowed());
+        assertFalse(policy(MaterialResolutionStatus.DIRECT_UNIQUE, MaterialProviderSource.OUTLINE)
+                .allowed());
         assertFalse(new ReplacementAdmissionPolicy(
                         MaterialResolutionStatus.DIRECT_UNIQUE,
                         MaterialProviderSource.IMMEDIATE,
@@ -41,7 +44,8 @@ class ReplacementAdmissionPolicyTest {
                         true,
                         true)
                 .allowed());
-        assertFalse(policy(MaterialResolutionStatus.UNRESOLVED, MaterialProviderSource.UNAVAILABLE).allowed());
+        assertFalse(policy(MaterialResolutionStatus.UNRESOLVED, MaterialProviderSource.UNAVAILABLE)
+                .allowed());
         assertFalse(new ReplacementAdmissionPolicy(
                         MaterialResolutionStatus.DIRECT_UNIQUE,
                         MaterialProviderSource.IMMEDIATE,

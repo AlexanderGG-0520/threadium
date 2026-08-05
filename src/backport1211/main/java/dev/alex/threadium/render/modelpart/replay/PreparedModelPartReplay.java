@@ -79,9 +79,8 @@ public final class PreparedModelPartReplay {
             float outputNormalY = transformNormalY(root, boneNormalX, boneNormalY, boneNormalZ);
             float outputNormalZ = transformNormalZ(root, boneNormalX, boneNormalY, boneNormalZ);
             if (pose.normalNeedsNormalization(bone) || root.normalNeedsNormalization()) {
-                float squaredLength = outputNormalX * outputNormalX
-                        + outputNormalY * outputNormalY
-                        + outputNormalZ * outputNormalZ;
+                float squaredLength =
+                        outputNormalX * outputNormalX + outputNormalY * outputNormalY + outputNormalZ * outputNormalZ;
                 if (!(squaredLength > 0.0F) || !Float.isFinite(squaredLength)) {
                     throw new IllegalArgumentException("ModelPart replay normal cannot be normalized");
                 }
@@ -164,21 +163,15 @@ public final class PreparedModelPartReplay {
     }
 
     private static float transformNormalX(ImmutableModelPartBonePose pose, int bone, float x, float y, float z) {
-        return normalElement(pose, bone, 0) * x
-                + normalElement(pose, bone, 3) * y
-                + normalElement(pose, bone, 6) * z;
+        return normalElement(pose, bone, 0) * x + normalElement(pose, bone, 3) * y + normalElement(pose, bone, 6) * z;
     }
 
     private static float transformNormalY(ImmutableModelPartBonePose pose, int bone, float x, float y, float z) {
-        return normalElement(pose, bone, 1) * x
-                + normalElement(pose, bone, 4) * y
-                + normalElement(pose, bone, 7) * z;
+        return normalElement(pose, bone, 1) * x + normalElement(pose, bone, 4) * y + normalElement(pose, bone, 7) * z;
     }
 
     private static float transformNormalZ(ImmutableModelPartBonePose pose, int bone, float x, float y, float z) {
-        return normalElement(pose, bone, 2) * x
-                + normalElement(pose, bone, 5) * y
-                + normalElement(pose, bone, 8) * z;
+        return normalElement(pose, bone, 2) * x + normalElement(pose, bone, 5) * y + normalElement(pose, bone, 8) * z;
     }
 
     private static float transformNormalX(ImmutableRootRenderTransform root, float x, float y, float z) {

@@ -27,8 +27,7 @@ abstract class ModelPartMixin {
             int color,
             CallbackInfo callbackInfo) {
         ModelPart root = (ModelPart) (Object) this;
-        if (ModelPartReplacementService.beginModelPartRender(
-                root, matrices, vertexConsumer, light, overlay, color)) {
+        if (ModelPartReplacementService.beginModelPartRender(root, matrices, vertexConsumer, light, overlay, color)) {
             ModelPartReplacementService.endModelPartRender();
             callbackInfo.cancel();
             return;

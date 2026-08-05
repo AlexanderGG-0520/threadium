@@ -110,6 +110,10 @@ public final class ImmutableModelPartMesh {
             if (bone < 0 || bone >= structure.partCount()) {
                 throw new IllegalArgumentException("Vertex bone index is outside the structure");
             }
+            if (vertex % 4 != 0) {
+                int quadBone = vertexData[(vertex - vertex % 4) * VERTEX_STRIDE_INTS + BONE_INDEX];
+                if (bone != quadBone) throw new IllegalArgumentException("A quad cannot span multiple bones");
+            }
         }
         for (int index : indices) {
             if (index < 0 || index >= vertexCount) throw new IllegalArgumentException("Mesh index is out of range");

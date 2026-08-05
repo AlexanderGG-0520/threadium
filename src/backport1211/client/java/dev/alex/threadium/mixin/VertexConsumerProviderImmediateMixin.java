@@ -30,8 +30,7 @@ abstract class VertexConsumerProviderImmediateMixin {
     }
 
     @Inject(
-            method =
-                    "draw(Lnet/minecraft/client/render/RenderLayer;Lnet/minecraft/client/render/BufferBuilder;)V",
+            method = "draw(Lnet/minecraft/client/render/RenderLayer;Lnet/minecraft/client/render/BufferBuilder;)V",
             at = @At("HEAD"),
             require = 1)
     private void threadium$flushOwnedGpuReplay(

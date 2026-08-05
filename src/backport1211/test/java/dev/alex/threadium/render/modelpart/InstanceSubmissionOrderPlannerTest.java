@@ -13,14 +13,7 @@ final class InstanceSubmissionOrderPlannerTest {
 
     @Test
     void reorderableEntriesCompactByExactKeyInFirstSeenOrder() {
-        var plan = planner.plan(
-                new int[] {0, 1, 2, 3, 4},
-                5,
-                new Object[] {"A", "B", "A", "C", "A"},
-                5,
-                0,
-                true,
-                true);
+        var plan = planner.plan(new int[] {0, 1, 2, 3, 4}, 5, new Object[] {"A", "B", "A", "C", "A"}, 5, 0, true, true);
 
         assertArrayEquals(new int[] {0, 2, 4, 1, 3}, copy(plan.packedSourceIndices(), plan.instanceCount()));
         assertArrayEquals(new int[] {0, 1, 3}, copy(plan.representativeSourceIndices(), plan.batchCount()));
@@ -30,14 +23,7 @@ final class InstanceSubmissionOrderPlannerTest {
 
     @Test
     void orderedEntriesOnlyMergeAdjacentEqualKeys() {
-        var plan = planner.plan(
-                new int[] {0, 1, 2, 3},
-                4,
-                new Object[] {"A", "A", "B", "A"},
-                4,
-                7,
-                false,
-                true);
+        var plan = planner.plan(new int[] {0, 1, 2, 3}, 4, new Object[] {"A", "A", "B", "A"}, 4, 7, false, true);
 
         assertArrayEquals(new int[] {0, 1, 2, 3}, copy(plan.packedSourceIndices(), plan.instanceCount()));
         assertArrayEquals(new int[] {0, 2, 3}, copy(plan.representativeSourceIndices(), plan.batchCount()));
@@ -47,8 +33,7 @@ final class InstanceSubmissionOrderPlannerTest {
 
     @Test
     void disabledConsolidationProducesSingletonsWithoutReordering() {
-        var plan = planner.plan(
-                new int[] {2, 0, 1}, 3, new Object[] {"A", "B", "A"}, 3, 4, true, false);
+        var plan = planner.plan(new int[] {2, 0, 1}, 3, new Object[] {"A", "B", "A"}, 3, 4, true, false);
 
         assertArrayEquals(new int[] {2, 0, 1}, copy(plan.packedSourceIndices(), plan.instanceCount()));
         assertArrayEquals(new int[] {4, 5, 6}, copy(plan.firstPackedInstances(), plan.batchCount()));
@@ -58,13 +43,7 @@ final class InstanceSubmissionOrderPlannerTest {
     @Test
     void packedEntriesRemainAnExactSourcePermutation() {
         var plan = planner.plan(
-                new int[] {0, 1, 2, 3, 4, 5},
-                6,
-                new Object[] {"C", "A", "B", "A", "C", "B"},
-                6,
-                0,
-                true,
-                true);
+                new int[] {0, 1, 2, 3, 4, 5}, 6, new Object[] {"C", "A", "B", "A", "C", "B"}, 6, 0, true, true);
         int[] packed = copy(plan.packedSourceIndices(), plan.instanceCount());
         Arrays.sort(packed);
 
