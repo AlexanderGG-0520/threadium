@@ -11,11 +11,13 @@ layout(location=8) in int iBoneBase;
 layout(location=9) in int iLight;
 layout(location=10) in int iOverlay;
 layout(location=11) in vec4 iTint;
+layout(location=12) in int iDecalBase;
 
 uniform mat4 uProjection;
 uniform mat4 uModelView;
 uniform mat4 uTextureMatrix;
 uniform samplerBuffer Bones;
+uniform samplerBuffer Decals;
 uniform vec3 uLight0Direction;
 uniform vec3 uLight1Direction;
 uniform int uFogShape;
@@ -39,6 +41,17 @@ vec4 mixLight(vec3 light0, vec3 light1, vec3 normal, vec4 color) {
     return vec4(color.rgb * accumulated, color.a);
 }
 
+vec2 threadiumDecalUv(vec3 position, vec3 normal) {
+    vec3 absoluteNormal = abs(normal);
+    if (absoluteNormal.y >= absoluteNormal.x && absoluteNormal.y >= absoluteNormal.z) {
+        return normal.y < 0.0 ? vec2(position.x, -position.z) : vec2(position.x, position.z);
+    }
+    if (absoluteNormal.z >= absoluteNormal.x) {
+        return normal.z < 0.0 ? vec2(-position.x, -position.y) : vec2(position.x, -position.y);
+    }
+    return normal.x < 0.0 ? vec2(-position.z, -position.y) : vec2(position.z, -position.y);
+}
+
 void main() {
     int base = (iBoneBase + int(aBone)) * 7;
     mat4 pose = mat4(
@@ -59,10 +72,30 @@ void main() {
     mat3 rootNormal = transpose(inverse(mat3(root)));
     vec3 normal = normalize(rootNormal * boneNormal * aNormal);
     bool directional = uShaderMode == 0 || uShaderMode == 1 || uShaderMode == 3 || uShaderMode == 10;
-    vVertexColor = directional ? mixLight(uLight0Direction, uLight1Direction, normal, iTint) : iTint;
-    vUv = (uShaderMode == 3 || uShaderMode == 4 || uShaderMode == 7)
-        ? (uTextureMatrix * vec4(aUv, 0.0, 1.0)).xy
-        : aUv;
+    bool whiteVertexColor = uShaderMode == 7 || uShaderMode == 8;
+    vVertexColor = whiteVertexColor
+        ? vec4(1.0)
+        : (directional ? mixLight(uLight0Direction, uLight1Direction, normal, iTint) : iTint);
+
+    if (uShaderMode == 8) {
+        int decal = iDecalBase * 7;
+        mat4 inverseTexture = mat4(
+            texelFetch(Decals, decal),
+            texelFetch(Decals, decal + 1),
+            texelFetch(Decals, decal + 2),
+            texelFetch(Decals, decal + 3));
+        vec4 inverseNormal0 = texelFetch(Decals, decal + 4);
+        vec4 inverseNormal1 = texelFetch(Decals, decal + 5);
+        vec4 inverseNormal2 = texelFetch(Decals, decal + 6);
+        mat3 inverseNormal = mat3(inverseNormal0.xyz, inverseNormal1.xyz, inverseNormal2.xyz);
+        vec3 decalPosition = (inverseTexture * modelPosition).xyz;
+        vec3 decalNormal = normalize(inverseNormal * normal);
+        vUv = threadiumDecalUv(decalPosition, decalNormal) * inverseNormal0.w;
+    } else {
+        vUv = (uShaderMode == 3 || uShaderMode == 4 || uShaderMode == 7)
+            ? (uTextureMatrix * vec4(aUv, 0.0, 1.0)).xy
+            : aUv;
+    }
     vDistance = fogDistance(modelPosition.xyz, uFogShape);
     vLight = iLight;
     vOverlay = iOverlay;

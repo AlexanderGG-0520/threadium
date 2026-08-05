@@ -6,15 +6,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-class RenderLayer1211GlintPolicyTest {
+class RenderLayer1211CrumblingPolicyTest {
     @Test
-    void glintUsesOrderedAdjacentGpuSubmission() {
-        RenderLayer1211Descriptor.Kind glint = RenderLayer1211Descriptor.Kind.GLINT;
+    void crumblingUsesSortedGpuSubmission() {
+        RenderLayer1211Descriptor.Kind crumbling = RenderLayer1211Descriptor.Kind.CRUMBLING;
 
-        assertEquals(RenderLayer1211Descriptor.ShaderMode.GLINT, glint.shaderMode());
-        assertEquals(RenderLayer1211Descriptor.SubmissionPolicy.ORDERED_ADJACENT_BATCHED, glint.submissionPolicy());
-        assertTrue(glint.alphaCutout());
-        assertTrue(glint.backendSupported());
+        assertEquals(RenderLayer1211Descriptor.ShaderMode.CRUMBLING, crumbling.shaderMode());
+        assertEquals(RenderLayer1211Descriptor.SubmissionPolicy.SORTED_QUAD_STREAM, crumbling.submissionPolicy());
+        assertTrue(crumbling.alphaCutout());
+        assertTrue(crumbling.backendSupported());
     }
 
     @Test

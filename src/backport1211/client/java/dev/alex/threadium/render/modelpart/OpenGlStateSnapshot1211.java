@@ -29,7 +29,7 @@ final class OpenGlStateSnapshot1211 {
     private final int blendEquationRgb;
     private final int blendEquationAlpha;
     private final int[] texture2d = new int[4];
-    private final int textureBuffer;
+    private final int[] textureBuffers = new int[2];
     private final int[] viewport = new int[4];
     private final int[] scissorBox = new int[4];
     private final int[] polygonMode = new int[2];
@@ -75,8 +75,10 @@ final class OpenGlStateSnapshot1211 {
             GL13C.glActiveTexture(GL13C.GL_TEXTURE0 + unit);
             texture2d[unit] = GL11C.glGetInteger(GL11C.GL_TEXTURE_BINDING_2D);
         }
-        GL13C.glActiveTexture(GL13C.GL_TEXTURE3);
-        textureBuffer = GL11C.glGetInteger(GL31C.GL_TEXTURE_BINDING_BUFFER);
+        for (int index = 0; index < textureBuffers.length; index++) {
+            GL13C.glActiveTexture(GL13C.GL_TEXTURE3 + index);
+            textureBuffers[index] = GL11C.glGetInteger(GL31C.GL_TEXTURE_BINDING_BUFFER);
+        }
         GL13C.glActiveTexture(activeTexture);
     }
 
@@ -92,8 +94,10 @@ final class OpenGlStateSnapshot1211 {
             GL13C.glActiveTexture(GL13C.GL_TEXTURE0 + unit);
             GL11C.glBindTexture(GL11C.GL_TEXTURE_2D, texture2d[unit]);
         }
-        GL13C.glActiveTexture(GL13C.GL_TEXTURE3);
-        GL11C.glBindTexture(GL31C.GL_TEXTURE_BUFFER, textureBuffer);
+        for (int index = 0; index < textureBuffers.length; index++) {
+            GL13C.glActiveTexture(GL13C.GL_TEXTURE3 + index);
+            GL11C.glBindTexture(GL31C.GL_TEXTURE_BUFFER, textureBuffers[index]);
+        }
         GL13C.glActiveTexture(activeTexture);
         set(GL11C.GL_BLEND, blend);
         GL14C.glBlendFuncSeparate(blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha);

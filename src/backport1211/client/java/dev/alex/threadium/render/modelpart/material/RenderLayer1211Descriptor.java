@@ -173,7 +173,7 @@ public record RenderLayer1211Descriptor(
         EYES(ShaderMode.EMISSIVE, SubmissionPolicy.SORTED_QUAD_STREAM, false, true),
         WATER_MASK(ShaderMode.WATER_MASK, SubmissionPolicy.OPAQUE_BATCHED, false, true),
         GLINT(ShaderMode.GLINT, SubmissionPolicy.ORDERED_ADJACENT_BATCHED, true, true),
-        CRUMBLING(ShaderMode.CRUMBLING, SubmissionPolicy.SORTED_QUAD_STREAM, true, false),
+        CRUMBLING(ShaderMode.CRUMBLING, SubmissionPolicy.SORTED_QUAD_STREAM, true, true),
         OUTLINE_CULL(ShaderMode.OUTLINE, SubmissionPolicy.ORDERED_ADJACENT_BATCHED, false, false),
         OUTLINE_NO_CULL(ShaderMode.OUTLINE, SubmissionPolicy.ORDERED_ADJACENT_BATCHED, false, false),
         UNSUPPORTED(ShaderMode.LIT_OVERLAY, SubmissionPolicy.SINGLETON_ONLY, true, false);
