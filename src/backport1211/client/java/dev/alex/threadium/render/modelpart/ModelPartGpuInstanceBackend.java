@@ -1,6 +1,8 @@
 package dev.alex.threadium.render.modelpart;
 
 import com.mojang.blaze3d.systems.RenderSystem;
+import dev.alex.threadium.config.ThreadiumConfig;
+import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.render.modelpart.pose.ImmutableModelPartBonePose;
 import dev.alex.threadium.render.modelpart.pose.ImmutableRootRenderTransform;
 import dev.alex.threadium.render.modelpart.structure.ImmutableModelPartMesh;
@@ -32,10 +34,9 @@ import org.lwjgl.system.MemoryUtil;
  * entity vertex stream is built on the GPU path.
  */
 public final class ModelPartGpuInstanceBackend implements AutoCloseable {
-    private static final boolean CONFIGURED = Boolean.getBoolean("threadium.backport1211.gpu");
-    private static final int MAXIMUM_QUEUED_INSTANCES = 4_096;
-    private static final int MAXIMUM_UPLOADED_BONES = 65_536;
-
+    private final ThreadiumConfig config = ThreadiumRuntimeConfig.current();
+    private final int maximumQueuedInstances = config.gpuMaxInstances();
+    private final int maximumUploadedBones = config.gpuMaxBonesPerFrame();
     private final BackendStateMachine states = new BackendStateMachine(ModelPartBackendState.UNINITIALIZED);
     private final IdentityHashMap<ImmutableModelPartMesh, MeshHandle> meshes = new IdentityHashMap<>();
     private final IdentityHashMap<Object, IdentityHashMap<RenderLayer, Batch>> queued = new IdentityHashMap<>();
@@ -54,10 +55,11 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     private long boneUploadCalls;
     private long instanceBytes;
     private long boneBytes;
+    private long cachedMeshBytes;
     private boolean closed;
 
     public static boolean configured() {
-        return CONFIGURED;
+        return ThreadiumRuntimeConfig.current().gpuReplacementEnabled();
     }
 
     public ModelPartBackendState state() {
@@ -76,7 +78,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             long worldGeneration,
             long resourceGeneration) {
         requireOpenRenderThread();
-        if (!CONFIGURED
+        if (!configured()
                 || !(provider instanceof VertexConsumerProvider.Immediate)
                 || layer == null
                 || mesh == null
@@ -85,7 +87,10 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                 || !pose.finite()
                 || !root.finite()
                 || pose.boneCount() != mesh.partCount()
-                || queuedInstances >= MAXIMUM_QUEUED_INSTANCES
+                || pose.boneCount() > config.gpuMaxBonesPerModel()
+                || mesh.vertexCount() > config.gpuMaxVerticesPerMesh()
+                || mesh.indexCount() > config.gpuMaxIndicesPerMesh()
+                || queuedInstances >= maximumQueuedInstances
                 || !ensureReady()) {
             return false;
         }
@@ -93,7 +98,13 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         if (handle == null) {
             handle = upload(mesh);
             if (handle == null) return false;
+            if (meshes.size() >= config.gpuMaxCachedMeshes()
+                    || Math.addExact(cachedMeshBytes, handle.bytes) > config.gpuMaxMeshBytes()) {
+                handle.delete();
+                return false;
+            }
             meshes.put(mesh, handle);
+            cachedMeshBytes = Math.addExact(cachedMeshBytes, handle.bytes);
         }
         IdentityHashMap<RenderLayer, Batch> providerBatches =
                 queued.computeIfAbsent(provider, ignored -> new IdentityHashMap<>());
@@ -205,7 +216,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL15C.glBindBuffer(GL31C.GL_TEXTURE_BUFFER, boneBuffer);
             GL15C.glBufferData(
                     GL31C.GL_TEXTURE_BUFFER,
-                    (long) MAXIMUM_UPLOADED_BONES * Gl33BoneLayout.BYTES_PER_BONE,
+                    (long) maximumUploadedBones * Gl33BoneLayout.BYTES_PER_BONE,
                     GL15C.GL_STREAM_DRAW);
             GL11C.glBindTexture(GL31C.GL_TEXTURE_BUFFER, boneTexture);
             GL31C.glTexBuffer(GL31C.GL_TEXTURE_BUFFER, GL30C.GL_RGBA32F, boneBuffer);
@@ -213,13 +224,13 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, instanceBuffer);
             GL15C.glBufferData(
                     GL15C.GL_ARRAY_BUFFER,
-                    (long) MAXIMUM_QUEUED_INSTANCES * ModelPartLayouts.INSTANCE_STRIDE,
+                    (long) maximumQueuedInstances * ModelPartLayouts.INSTANCE_STRIDE,
                     GL15C.GL_STREAM_DRAW);
 
-            boneStaging = MemoryUtil.memAlloc(
-                    ModelPartLayouts.bytes(MAXIMUM_UPLOADED_BONES, ModelPartLayouts.BONE_STRIDE));
-            instanceStaging = MemoryUtil.memAlloc(
-                    ModelPartLayouts.bytes(MAXIMUM_QUEUED_INSTANCES, ModelPartLayouts.INSTANCE_STRIDE));
+            boneStaging =
+                    MemoryUtil.memAlloc(ModelPartLayouts.bytes(maximumUploadedBones, ModelPartLayouts.BONE_STRIDE));
+            instanceStaging =
+                    MemoryUtil.memAlloc(ModelPartLayouts.bytes(maximumQueuedInstances, ModelPartLayouts.INSTANCE_STRIDE));
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, 0);
             GL11C.glBindTexture(GL31C.GL_TEXTURE_BUFFER, 0);
             states.transition(ModelPartBackendState.INITIALIZING, ModelPartBackendState.READY);
@@ -235,24 +246,24 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         int vao = 0;
         int vbo = 0;
         int ibo = 0;
-        try (MemoryStack stack = MemoryStack.stackPush()) {
+        ByteBuffer vertices = null;
+        IntBuffer indices = null;
+        try {
             vao = GL30C.glGenVertexArrays();
             vbo = GL15C.glGenBuffers();
             ibo = GL15C.glGenBuffers();
             GL30C.glBindVertexArray(vao);
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, vbo);
-            ByteBuffer vertices = stack.malloc(Math.multiplyExact(mesh.vertexCount(), ModelPartLayouts.VERTEX_STRIDE));
+            vertices = MemoryUtil.memAlloc(Math.multiplyExact(mesh.vertexCount(), ModelPartLayouts.VERTEX_STRIDE));
             for (int vertex = 0; vertex < mesh.vertexCount(); vertex++) {
-                for (int field = 0; field < 8; field++) {
-                    vertices.putInt(mesh.vertexFieldBits(vertex, field));
-                }
+                for (int field = 0; field < 8; field++) vertices.putInt(mesh.vertexFieldBits(vertex, field));
                 vertices.putFloat(mesh.vertexFieldBits(vertex, ImmutableModelPartMesh.BONE_INDEX));
             }
             vertices.flip();
             GL15C.glBufferData(GL15C.GL_ARRAY_BUFFER, vertices, GL15C.GL_STATIC_DRAW);
 
             GL15C.glBindBuffer(GL15C.GL_ELEMENT_ARRAY_BUFFER, ibo);
-            IntBuffer indices = stack.mallocInt(mesh.indexCount());
+            indices = MemoryUtil.memAllocInt(mesh.indexCount());
             for (int index = 0; index < mesh.indexCount(); index++) indices.put(mesh.index(index));
             indices.flip();
             GL15C.glBufferData(GL15C.GL_ELEMENT_ARRAY_BUFFER, indices, GL15C.GL_STATIC_DRAW);
@@ -284,6 +295,9 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             if (ibo != 0) GL15C.glDeleteBuffers(ibo);
             fail();
             return null;
+        } finally {
+            if (vertices != null) MemoryUtil.memFree(vertices);
+            if (indices != null) MemoryUtil.memFree(indices);
         }
     }
 
@@ -300,7 +314,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             if (existing == null) {
                 existing = totalBones;
                 totalBones = Math.addExact(totalBones, pose.boneCount());
-                if (totalBones > MAXIMUM_UPLOADED_BONES) {
+                if (totalBones > maximumUploadedBones) {
                     fail();
                     throw new IllegalStateException("Threadium bone palette capacity exceeded");
                 }
@@ -321,8 +335,14 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             keys[index] = entries.get(index).mesh;
         }
         boolean reorderable = !layer.isTranslucent();
-        InstanceSubmissionOrderPlanner.Plan plan =
-                orderPlanner.plan(sourceIndices, entryCount, keys, entryCount, 0, reorderable, true);
+        InstanceSubmissionOrderPlanner.Plan plan = orderPlanner.plan(
+                sourceIndices,
+                entryCount,
+                keys,
+                entryCount,
+                0,
+                reorderable,
+                config.gpuBatchConsolidation());
 
         ByteBuffer instances =
                 instanceStaging.clear().limit(ModelPartLayouts.bytes(entryCount, ModelPartLayouts.INSTANCE_STRIDE));
@@ -349,7 +369,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL15C.glBindBuffer(GL31C.GL_TEXTURE_BUFFER, boneBuffer);
             GL15C.glBufferData(
                     GL31C.GL_TEXTURE_BUFFER,
-                    (long) MAXIMUM_UPLOADED_BONES * Gl33BoneLayout.BYTES_PER_BONE,
+                    (long) maximumUploadedBones * Gl33BoneLayout.BYTES_PER_BONE,
                     GL15C.GL_STREAM_DRAW);
             GL15C.glBufferSubData(GL31C.GL_TEXTURE_BUFFER, 0, bones);
             boneUploadCalls++;
@@ -358,7 +378,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, instanceBuffer);
             GL15C.glBufferData(
                     GL15C.GL_ARRAY_BUFFER,
-                    (long) MAXIMUM_QUEUED_INSTANCES * ModelPartLayouts.INSTANCE_STRIDE,
+                    (long) maximumQueuedInstances * ModelPartLayouts.INSTANCE_STRIDE,
                     GL15C.GL_STREAM_DRAW);
             GL15C.glBufferSubData(GL15C.GL_ARRAY_BUFFER, 0, instances);
             instanceUploadCalls++;
@@ -431,11 +451,23 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                     base + column * 16L);
         }
         GL30C.glVertexAttribIPointer(
-                8, 1, GL11C.GL_INT, ModelPartLayouts.INSTANCE_STRIDE, base + ModelPartLayouts.INSTANCE_BONE_BASE_OFFSET);
+                8,
+                1,
+                GL11C.GL_INT,
+                ModelPartLayouts.INSTANCE_STRIDE,
+                base + ModelPartLayouts.INSTANCE_BONE_BASE_OFFSET);
         GL30C.glVertexAttribIPointer(
-                9, 1, GL11C.GL_INT, ModelPartLayouts.INSTANCE_STRIDE, base + ModelPartLayouts.INSTANCE_LIGHT_OFFSET);
+                9,
+                1,
+                GL11C.GL_INT,
+                ModelPartLayouts.INSTANCE_STRIDE,
+                base + ModelPartLayouts.INSTANCE_LIGHT_OFFSET);
         GL30C.glVertexAttribIPointer(
-                10, 1, GL11C.GL_INT, ModelPartLayouts.INSTANCE_STRIDE, base + ModelPartLayouts.INSTANCE_OVERLAY_OFFSET);
+                10,
+                1,
+                GL11C.GL_INT,
+                ModelPartLayouts.INSTANCE_STRIDE,
+                base + ModelPartLayouts.INSTANCE_OVERLAY_OFFSET);
         GL20C.glVertexAttribPointer(
                 11,
                 4,
@@ -471,12 +503,9 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     }
 
     private void releaseGpuResources() {
-        for (MeshHandle mesh : meshes.values()) {
-            GL30C.glDeleteVertexArrays(mesh.vao);
-            GL15C.glDeleteBuffers(mesh.vbo);
-            GL15C.glDeleteBuffers(mesh.ibo);
-        }
+        for (MeshHandle mesh : meshes.values()) mesh.delete();
         meshes.clear();
+        cachedMeshBytes = 0;
         if (program != 0) GL20C.glDeleteProgram(program);
         if (boneBuffer != 0) GL15C.glDeleteBuffers(boneBuffer);
         if (boneTexture != 0) GL11C.glDeleteTextures(boneTexture);
@@ -521,18 +550,18 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     private static int link(String vertexSource, String fragmentSource) {
         int vertex = compile(GL20C.GL_VERTEX_SHADER, vertexSource);
         int fragment = compile(GL20C.GL_FRAGMENT_SHADER, fragmentSource);
-        int program = GL20C.glCreateProgram();
-        GL20C.glAttachShader(program, vertex);
-        GL20C.glAttachShader(program, fragment);
-        GL20C.glLinkProgram(program);
+        int linked = GL20C.glCreateProgram();
+        GL20C.glAttachShader(linked, vertex);
+        GL20C.glAttachShader(linked, fragment);
+        GL20C.glLinkProgram(linked);
         GL20C.glDeleteShader(vertex);
         GL20C.glDeleteShader(fragment);
-        if (GL20C.glGetProgrami(program, GL20C.GL_LINK_STATUS) == 0) {
-            String log = GL20C.glGetProgramInfoLog(program);
-            GL20C.glDeleteProgram(program);
+        if (GL20C.glGetProgrami(linked, GL20C.GL_LINK_STATUS) == 0) {
+            String log = GL20C.glGetProgramInfoLog(linked);
+            GL20C.glDeleteProgram(linked);
             throw new IllegalStateException(log);
         }
-        return program;
+        return linked;
     }
 
     private static int compile(int type, String source) {
@@ -561,7 +590,13 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             long worldGeneration,
             long resourceGeneration) {}
 
-    private record MeshHandle(int vao, int vbo, int ibo, int indexCount, int boneCount, long bytes) {}
+    private record MeshHandle(int vao, int vbo, int ibo, int indexCount, int boneCount, long bytes) {
+        private void delete() {
+            GL30C.glDeleteVertexArrays(vao);
+            GL15C.glDeleteBuffers(vbo);
+            GL15C.glDeleteBuffers(ibo);
+        }
+    }
 
     public record Diagnostics(
             ModelPartBackendState state,
