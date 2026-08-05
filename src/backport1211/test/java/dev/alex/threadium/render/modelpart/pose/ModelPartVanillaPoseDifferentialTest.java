@@ -152,9 +152,10 @@ final class ModelPartVanillaPoseDifferentialTest {
         singular.root.xScale = 0;
         singular.root.yScale = 1;
         singular.root.zScale = 2;
-        Differential singularResult = assertDifferential(singular, identityRoot());
-        assertFalse(singularResult.pose.finite());
-        assertTrue(singularResult.pose.normalNeedsNormalization(0));
+        ImmutableModelPartMesh singularMesh = captureMesh(singular);
+        ImmutableModelPartBonePose singularPose = capturePose(singular, singularMesh.structure());
+        assertFalse(singularPose.finite());
+        assertTrue(singularPose.normalNeedsNormalization(0));
 
         Tree nan = tree(singlePartModel());
         nan.root.pitch = Float.intBitsToFloat(0x7fc01234);
