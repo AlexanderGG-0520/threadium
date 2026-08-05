@@ -40,7 +40,7 @@ public final class ThreadiumReplayVertexConsumer implements VertexConsumer {
     }
 
     @Override
-    public VertexConsumer vertex(float x, float y, float z) {
+    public VertexConsumer vertex(double x, double y, double z) {
         delegate.vertex(x, y, z);
         return this;
     }
@@ -73,5 +73,20 @@ public final class ThreadiumReplayVertexConsumer implements VertexConsumer {
     public VertexConsumer normal(float x, float y, float z) {
         delegate.normal(x, y, z);
         return this;
+    }
+
+    @Override
+    public void next() {
+        delegate.next();
+    }
+
+    @Override
+    public void fixedColor(int red, int green, int blue, int alpha) {
+        delegate.fixedColor(red, green, blue, alpha);
+    }
+
+    @Override
+    public void unfixColor() {
+        delegate.unfixColor();
     }
 }
