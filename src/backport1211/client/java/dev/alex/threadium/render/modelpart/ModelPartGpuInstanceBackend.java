@@ -15,6 +15,7 @@ import java.nio.IntBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
+import java.util.Objects;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumerProvider;
 import org.joml.Matrix4fc;
@@ -37,6 +38,7 @@ import org.lwjgl.system.MemoryUtil;
  * entity vertex stream is built on the GPU path.
  */
 public final class ModelPartGpuInstanceBackend implements AutoCloseable {
+    private final ModelPart1211Metrics metrics;
     private final ThreadiumConfig config = ThreadiumRuntimeConfig.current();
     private final int maximumQueuedInstances = config.gpuMaxInstances();
     private final int maximumUploadedBones = config.gpuMaxBonesPerFrame();
@@ -66,6 +68,10 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     private long boneBytes;
     private long cachedMeshBytes;
     private boolean closed;
+
+    public ModelPartGpuInstanceBackend(ModelPart1211Metrics metrics) {
+        this.metrics = Objects.requireNonNull(metrics, "metrics");
+    }
 
     public static boolean configured() {
         return ThreadiumRuntimeConfig.current().gpuReplacementEnabled();
@@ -138,6 +144,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                         decal,
                         worldGeneration,
                         resourceGeneration));
+        metrics.recordQueued(descriptor.kind(), 1);
         return true;
     }
 
@@ -191,6 +198,8 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                 worldGeneration,
                 resourceGeneration);
         appendPair(baseProvider, base, crumblingProvider, crumbling);
+        metrics.recordQueued(baseDescriptor.kind(), 1);
+        metrics.recordQueued(crumblingDescriptor.kind(), 1);
         return true;
     }
 
@@ -245,6 +254,8 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                 worldGeneration,
                 resourceGeneration);
         appendPair(baseProvider, base, outlineProvider, outline);
+        metrics.recordQueued(baseDescriptor.kind(), 1);
+        metrics.recordQueued(outlineDescriptor.kind(), 1);
         return true;
     }
 
@@ -286,6 +297,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
 
     private MeshHandle meshHandle(ImmutableModelPartMesh mesh) {
         MeshHandle handle = meshes.get(mesh);
+        metrics.recordGpuMeshLookup(handle != null);
         if (handle != null) return handle;
         handle = upload(mesh);
         if (handle == null) return null;
@@ -351,6 +363,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         for (Entry entry : batch.entries) {
             if (entry.worldGeneration != currentWorldGeneration
                     || entry.resourceGeneration != currentResourceGeneration) {
+                metrics.recordStaleSubmission();
                 fail();
                 throw new IllegalStateException("Threadium rejected a stale Minecraft 1.21.1 GPU submission");
             }
@@ -361,6 +374,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     public void verifyFrameDrained() {
         requireOpenRenderThread();
         if (queuedInstances != 0 || !queued.isEmpty()) {
+            metrics.recordUndrainedFrame();
             clearQueued();
             throw new IllegalStateException("Threadium GPU instance queue crossed a frame boundary without flushing");
         }
@@ -422,6 +436,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         if (states.state().accepts()) return true;
         if (states.state() != ModelPartBackendState.UNINITIALIZED || !RenderSystem.isOnRenderThread()) return false;
         states.transition(ModelPartBackendState.UNINITIALIZED, ModelPartBackendState.INITIALIZING);
+        metrics.recordInitializationAttempt();
         try {
             program = link(
                     read("/assets/threadium/shaders/modelpart_gl33_1211.vert"),
@@ -463,8 +478,11 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, 0);
             GL11C.glBindTexture(GL31C.GL_TEXTURE_BUFFER, 0);
             states.transition(ModelPartBackendState.INITIALIZING, ModelPartBackendState.READY);
+            metrics.recordInitializationResult(true);
             return true;
         } catch (Throwable failure) {
+            metrics.recordInitializationResult(false);
+            metrics.recordBackendFailure();
             releaseGpuResources();
             states.transition(ModelPartBackendState.INITIALIZING, ModelPartBackendState.FAILED);
             return false;
@@ -517,8 +535,10 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL30C.glBindVertexArray(0);
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, 0);
             meshUploads++;
+            metrics.recordMeshUpload(true);
             return new MeshHandle(vao, vbo, ibo, mesh.indexCount(), mesh.partCount(), mesh.retainedBytes(), mesh);
         } catch (Throwable failure) {
+            metrics.recordMeshUpload(false);
             if (vao != 0) GL30C.glDeleteVertexArrays(vao);
             if (vbo != 0) GL15C.glDeleteBuffers(vbo);
             if (ibo != 0) GL15C.glDeleteBuffers(ibo);
@@ -532,6 +552,10 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
 
     private IdentityHashMap<Object, ModelPartFlushStats> drawBatch(RenderLayer layer, ArrayList<Entry> entries) {
         if (entries.isEmpty() || !states.state().accepts()) return new IdentityHashMap<>();
+        long flushStart = metrics.now();
+        long planningNanos = 0L;
+        long uploadNanos = 0L;
+        long submissionNanos = 0L;
         int entryCount = entries.size();
         IdentityHashMap<ImmutableModelPartBonePose, Integer> boneBases = new IdentityHashMap<>();
         ArrayList<ImmutableModelPartBonePose> palette = new ArrayList<>();
@@ -572,8 +596,10 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         boolean sorted = descriptor.submissionPolicy() == RenderLayer1211Descriptor.SubmissionPolicy.SORTED_QUAD_STREAM;
         boolean reorderable =
                 descriptor.submissionPolicy() == RenderLayer1211Descriptor.SubmissionPolicy.OPAQUE_BATCHED;
+        long planningStart = metrics.now();
         InstanceSubmissionOrderPlanner.Plan plan = orderPlanner.plan(
                 sourceIndices, entryCount, keys, entryCount, 0, reorderable, config.gpuBatchConsolidation());
+        planningNanos += metrics.delta(planningStart);
 
         int[] packedIndexBySource = new int[entryCount];
         ByteBuffer instances =
@@ -595,7 +621,9 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         }
         instances.flip();
         if (decals != null) decals.flip();
+        planningStart = metrics.now();
         ArrayList<SortedModelPartQuads.Reference> sortedReferences = sorted ? collectSortedReferences(entries) : null;
+        planningNanos += metrics.delta(planningStart);
         IdentityHashMap<Object, MutableFlushStats> mutableFeedback = new IdentityHashMap<>();
         for (Entry entry : entries) {
             MutableFlushStats stats =
@@ -627,6 +655,26 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             }
         }
 
+        int actualDrawCalls = sorted ? sortedReferences.size() : plan.batchCount();
+        int maximumBatch = sorted && !sortedReferences.isEmpty() ? 1 : 0;
+        int singletonCount = 0;
+        int multiCount = 0;
+        int instancesInMultiDraws = 0;
+        if (!sorted) {
+            for (int batch = 0; batch < plan.batchCount(); batch++) {
+                int count = plan.instanceCounts()[batch];
+                maximumBatch = Math.max(maximumBatch, count);
+                if (count == 1) singletonCount++;
+                else {
+                    multiCount++;
+                    instancesInMultiDraws += count;
+                }
+            }
+        }
+        long packingNanos = Math.max(0L, metrics.delta(flushStart) - planningNanos);
+        int boneByteCount = bones.remaining();
+        int instanceByteCount = instances.remaining() + (decals == null ? 0 : decals.remaining());
+
         OpenGlStateSnapshot1211 previous = OpenGlStateSnapshot1211.capture();
         boolean layerStarted = false;
         try {
@@ -646,6 +694,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL11C.glBindTexture(GL31C.GL_TEXTURE_BUFFER, decalTexture);
             GL20C.glUniform1i(uniform(program, "Decals"), 4);
 
+            long uploadStart = metrics.now();
             GL15C.glBindBuffer(GL31C.GL_TEXTURE_BUFFER, boneBuffer);
             GL15C.glBufferData(
                     GL31C.GL_TEXTURE_BUFFER,
@@ -672,7 +721,10 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL15C.glBufferSubData(GL15C.GL_ARRAY_BUFFER, 0, instances);
             instanceUploadCalls++;
             instanceBytes = Math.addExact(instanceBytes, instances.remaining());
+            uploadNanos = metrics.delta(uploadStart);
+            metrics.recordUploads(1, 1, instanceByteCount, boneByteCount);
 
+            long submissionStart = metrics.now();
             if (sorted) {
                 drawSorted(entries, sortedReferences, packedIndexBySource);
                 sortedInstances = Math.addExact(sortedInstances, entryCount);
@@ -692,6 +744,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                 }
             }
             submittedInstances = Math.addExact(submittedInstances, entryCount);
+            submissionNanos = metrics.delta(submissionStart);
             if (states.state() == ModelPartBackendState.READY) {
                 states.transition(ModelPartBackendState.READY, ModelPartBackendState.ACTIVE);
             }
@@ -704,6 +757,20 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             if (layerStarted) layer.endDrawing();
             previous.restore();
         }
+        metrics.recordFlush(
+                descriptor.kind(),
+                entryCount,
+                actualDrawCalls,
+                sorted ? 0 : entryCount,
+                sorted ? 0 : actualDrawCalls,
+                sorted ? entryCount : 0,
+                sorted ? actualDrawCalls : 0,
+                sorted ? sortedReferences.size() : 0,
+                singletonCount,
+                multiCount,
+                instancesInMultiDraws,
+                maximumBatch);
+        metrics.recordFlushTiming(metrics.delta(flushStart), packingNanos, planningNanos, uploadNanos, submissionNanos);
         IdentityHashMap<Object, ModelPartFlushStats> feedback = new IdentityHashMap<>();
         for (var entry : mutableFeedback.entrySet())
             feedback.put(entry.getKey(), entry.getValue().freeze());
@@ -902,6 +969,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     }
 
     private void fail() {
+        metrics.recordBackendFailure();
         ModelPartBackendState state = states.state();
         if (state == ModelPartBackendState.READY || state == ModelPartBackendState.ACTIVE) {
             states.transition(state, ModelPartBackendState.FAILED);
