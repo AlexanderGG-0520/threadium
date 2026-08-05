@@ -172,7 +172,7 @@ public record RenderLayer1211Descriptor(
         ENERGY_SWIRL(ShaderMode.EMISSIVE_TEXTURE_MATRIX, SubmissionPolicy.SORTED_QUAD_STREAM, true, true),
         EYES(ShaderMode.EMISSIVE, SubmissionPolicy.SORTED_QUAD_STREAM, false, true),
         WATER_MASK(ShaderMode.WATER_MASK, SubmissionPolicy.OPAQUE_BATCHED, false, true),
-        GLINT(ShaderMode.GLINT, SubmissionPolicy.SORTED_QUAD_STREAM, true, false),
+        GLINT(ShaderMode.GLINT, SubmissionPolicy.ORDERED_ADJACENT_BATCHED, true, true),
         CRUMBLING(ShaderMode.CRUMBLING, SubmissionPolicy.SORTED_QUAD_STREAM, true, false),
         OUTLINE_CULL(ShaderMode.OUTLINE, SubmissionPolicy.ORDERED_ADJACENT_BATCHED, false, false),
         OUTLINE_NO_CULL(ShaderMode.OUTLINE, SubmissionPolicy.ORDERED_ADJACENT_BATCHED, false, false),
@@ -188,6 +188,22 @@ public record RenderLayer1211Descriptor(
             this.submissionPolicy = submissionPolicy;
             this.alphaCutout = alphaCutout;
             this.backendSupported = backendSupported;
+        }
+
+        ShaderMode shaderMode() {
+            return shaderMode;
+        }
+
+        SubmissionPolicy submissionPolicy() {
+            return submissionPolicy;
+        }
+
+        boolean alphaCutout() {
+            return alphaCutout;
+        }
+
+        boolean backendSupported() {
+            return backendSupported;
         }
     }
 
