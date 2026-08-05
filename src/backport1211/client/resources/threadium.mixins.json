@@ -8,7 +8,8 @@
     "OutlineVertexConsumerProviderMixin",
     "VertexConsumerProviderImmediateMixin",
     "accessor.MatrixStackEntryAccessor",
-    "accessor.ModelPartAccessor"
+    "accessor.ModelPartAccessor",
+    "compat.ImmediatelyFastBatchableBufferSourceMixin"
   ],
   "injectors": {
     "defaultRequire": 1
