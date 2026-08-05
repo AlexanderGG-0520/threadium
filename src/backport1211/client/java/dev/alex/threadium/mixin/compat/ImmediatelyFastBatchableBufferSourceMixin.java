@@ -1,5 +1,6 @@
 package dev.alex.threadium.mixin.compat;
 
+import dev.alex.threadium.render.entity.ModelPartReplacementService;
 import dev.alex.threadium.render.entity.PassThroughEntityRenderService;
 import dev.alex.threadium.render.modelpart.material.MaterialProviderSource;
 import net.minecraft.client.render.RenderLayer;
@@ -22,7 +23,10 @@ abstract class ImmediatelyFastBatchableBufferSourceMixin {
     @Inject(method = "getBuffer", at = @At("RETURN"), require = 0, remap = false)
     private void threadium$observeReturnedConsumer(
             RenderLayer layer, CallbackInfoReturnable<VertexConsumer> callbackInfo) {
+        VertexConsumer consumer = callbackInfo.getReturnValue();
         PassThroughEntityRenderService.observeMaterialProviderRequest(
-                MaterialProviderSource.IMMEDIATELY_FAST, this, layer, callbackInfo.getReturnValue());
+                MaterialProviderSource.IMMEDIATELY_FAST, this, layer, consumer);
+        ModelPartReplacementService.observeMaterialProviderRequest(
+                MaterialProviderSource.IMMEDIATELY_FAST, this, layer, consumer);
     }
 }
