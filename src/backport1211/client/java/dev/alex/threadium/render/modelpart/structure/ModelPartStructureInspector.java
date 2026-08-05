@@ -64,7 +64,10 @@ public final class ModelPartStructureInspector {
     private static final class MinecraftReader implements ModelPartStructureBuilder.Reader<ModelPart> {
         private static final int CAPTURE_LIGHT = 0x24681357;
         private static final int CAPTURE_OVERLAY = 0x13572468;
-        private static final int CAPTURE_COLOR = 0xa1b2c3d4;
+        private static final float CAPTURE_RED = 161.0F / 255.0F;
+        private static final float CAPTURE_GREEN = 178.0F / 255.0F;
+        private static final float CAPTURE_BLUE = 195.0F / 255.0F;
+        private static final float CAPTURE_ALPHA = 212.0F / 255.0F;
 
         private final MatrixStack.Entry identityEntry;
 
@@ -84,7 +87,15 @@ public final class ModelPartStructureInspector {
             capture.beginNode(boneIndex);
             for (ModelPart.Cuboid cuboid : cuboids) {
                 Objects.requireNonNull(cuboid, "cuboid")
-                        .renderCuboid(identityEntry, consumer, CAPTURE_LIGHT, CAPTURE_OVERLAY, CAPTURE_COLOR);
+                        .renderCuboid(
+                                identityEntry,
+                                consumer,
+                                CAPTURE_LIGHT,
+                                CAPTURE_OVERLAY,
+                                CAPTURE_RED,
+                                CAPTURE_GREEN,
+                                CAPTURE_BLUE,
+                                CAPTURE_ALPHA);
                 capture.endCuboid();
             }
         }
