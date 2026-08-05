@@ -1,0 +1,29 @@
+name: Export Minecraft 1.21.1 adaptive workspace
+
+on:
+  push:
+    branches:
+      - agent/mc1211-adaptive-export
+
+permissions:
+  contents: read
+
+jobs:
+  export-workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out workspace branch
+        uses: actions/checkout@v4
+
+      - name: Package repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude=.git --exclude=build --exclude=.gradle -czf /tmp/threadium-mc1211-adaptive-workspace.tar.gz .
+
+      - name: Upload workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: threadium-mc1211-adaptive-workspace
+          path: /tmp/threadium-mc1211-adaptive-workspace.tar.gz
+          retention-days: 1
