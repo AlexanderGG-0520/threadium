@@ -167,6 +167,9 @@ public final class ModelPartReplacementService {
                         0,
                         0,
                         0,
+                        0,
+                        0,
+                        0,
                         0)
                 : current.gpuBackend.diagnostics();
         return current == null

@@ -39,13 +39,7 @@ public record RenderLayer1211Descriptor(
                 supported,
                 kind != Kind.OUTLINE_NO_CULL && kind != Kind.OUTLINE_CULL);
         return new RenderLayer1211Descriptor(
-                layer,
-                inspection.texture,
-                kind,
-                kind.shaderMode,
-                kind.submissionPolicy,
-                kind.alphaCutout,
-                policy);
+                layer, inspection.texture, kind, kind.shaderMode, kind.submissionPolicy, kind.alphaCutout, policy);
     }
 
     public boolean replacementSafe() {
@@ -56,12 +50,14 @@ public record RenderLayer1211Descriptor(
         if (!(layer instanceof RenderLayer.MultiPhase)) return Inspection.unsupported();
         Identifier texture = texture(layer);
         if (texture != null) {
-            if (layer == RenderLayer.getArmorCutoutNoCull(texture)) return new Inspection(texture, Kind.ARMOR_CUTOUT, true);
+            if (layer == RenderLayer.getArmorCutoutNoCull(texture))
+                return new Inspection(texture, Kind.ARMOR_CUTOUT, true);
             if (phaseEquivalent(layer, RenderLayer.createArmorDecalCutoutNoCull(texture), false)) {
                 return new Inspection(texture, Kind.ARMOR_DECAL, true);
             }
             if (layer == RenderLayer.getEntitySolid(texture)) return new Inspection(texture, Kind.ENTITY_SOLID, true);
-            if (layer == RenderLayer.getEntityCutout(texture)) return new Inspection(texture, Kind.ENTITY_CUTOUT_CULL, true);
+            if (layer == RenderLayer.getEntityCutout(texture))
+                return new Inspection(texture, Kind.ENTITY_CUTOUT_CULL, true);
             if (layer == RenderLayer.getEntityCutoutNoCull(texture, true)
                     || layer == RenderLayer.getEntityCutoutNoCull(texture, false)) {
                 return new Inspection(texture, Kind.ENTITY_CUTOUT, true);
@@ -97,7 +93,8 @@ public record RenderLayer1211Descriptor(
             }
             if (layer == RenderLayer.getBlockBreaking(texture)) return new Inspection(texture, Kind.CRUMBLING, true);
             if (layer == RenderLayer.getOutline(texture)) return new Inspection(texture, Kind.OUTLINE_NO_CULL, true);
-            RenderLayer cullingOutline = RenderLayer.getEntityCutout(texture).getAffectedOutline().orElse(null);
+            RenderLayer cullingOutline =
+                    RenderLayer.getEntityCutout(texture).getAffectedOutline().orElse(null);
             if (layer == cullingOutline) return new Inspection(texture, Kind.OUTLINE_CULL, true);
         }
         if (layer == RenderLayer.getWaterMask()) return new Inspection(null, Kind.WATER_MASK, true);
@@ -124,7 +121,8 @@ public record RenderLayer1211Descriptor(
                 || actual.hasCrumbling() != template.hasCrumbling()
                 || actual.isTranslucent() != template.isTranslucent()
                 || actual.isOutline() != template.isOutline()
-                || actual.getAffectedOutline().isPresent() != template.getAffectedOutline().isPresent()) {
+                || actual.getAffectedOutline().isPresent()
+                        != template.getAffectedOutline().isPresent()) {
             return false;
         }
         List<?> actualPhases = phases(actual);
@@ -133,7 +131,8 @@ public record RenderLayer1211Descriptor(
         for (int index = 0; index < actualPhases.size(); index++) {
             Object left = actualPhases.get(index);
             Object right = templatePhases.get(index);
-            if (index == 0 && left instanceof RenderPhaseTextureAccessor leftTexture
+            if (index == 0
+                    && left instanceof RenderPhaseTextureAccessor leftTexture
                     && right instanceof RenderPhaseTextureAccessor rightTexture) {
                 if (left.getClass() != right.getClass()
                         || leftTexture.threadium$isBlurred() != rightTexture.threadium$isBlurred()
@@ -164,15 +163,14 @@ public record RenderLayer1211Descriptor(
         ENTITY_CUTOUT(ShaderMode.LIT_OVERLAY, SubmissionPolicy.OPAQUE_BATCHED, true, true),
         ENTITY_CUTOUT_Z_OFFSET(ShaderMode.LIT_OVERLAY, SubmissionPolicy.OPAQUE_BATCHED, true, true),
         ENTITY_DECAL(ShaderMode.LIT_DECAL, SubmissionPolicy.ORDERED_ADJACENT_BATCHED, true, true),
-        ENTITY_TRANSLUCENT(ShaderMode.LIT_OVERLAY, SubmissionPolicy.SORTED_QUAD_STREAM, true, false),
-        ENTITY_TRANSLUCENT_EMISSIVE(
-                ShaderMode.EMISSIVE_OVERLAY, SubmissionPolicy.SORTED_QUAD_STREAM, true, false),
-        ENTITY_TRANSLUCENT_CULL(ShaderMode.LIT_NO_OVERLAY, SubmissionPolicy.SORTED_QUAD_STREAM, true, false),
-        ITEM_ENTITY_TRANSLUCENT_CULL(ShaderMode.LIT_OVERLAY, SubmissionPolicy.SORTED_QUAD_STREAM, true, false),
-        BANNER_PATTERN(ShaderMode.LIT_NO_OVERLAY, SubmissionPolicy.SORTED_QUAD_STREAM, false, false),
-        BREEZE_WIND(ShaderMode.LIT_TEXTURE_MATRIX, SubmissionPolicy.SORTED_QUAD_STREAM, true, false),
-        ENERGY_SWIRL(ShaderMode.EMISSIVE_TEXTURE_MATRIX, SubmissionPolicy.SORTED_QUAD_STREAM, true, false),
-        EYES(ShaderMode.EMISSIVE, SubmissionPolicy.SORTED_QUAD_STREAM, false, false),
+        ENTITY_TRANSLUCENT(ShaderMode.LIT_OVERLAY, SubmissionPolicy.SORTED_QUAD_STREAM, true, true),
+        ENTITY_TRANSLUCENT_EMISSIVE(ShaderMode.EMISSIVE_OVERLAY, SubmissionPolicy.SORTED_QUAD_STREAM, true, true),
+        ENTITY_TRANSLUCENT_CULL(ShaderMode.LIT_NO_OVERLAY, SubmissionPolicy.SORTED_QUAD_STREAM, true, true),
+        ITEM_ENTITY_TRANSLUCENT_CULL(ShaderMode.LIT_OVERLAY, SubmissionPolicy.SORTED_QUAD_STREAM, true, true),
+        BANNER_PATTERN(ShaderMode.LIT_NO_OVERLAY, SubmissionPolicy.SORTED_QUAD_STREAM, false, true),
+        BREEZE_WIND(ShaderMode.LIT_TEXTURE_MATRIX, SubmissionPolicy.SORTED_QUAD_STREAM, true, true),
+        ENERGY_SWIRL(ShaderMode.EMISSIVE_TEXTURE_MATRIX, SubmissionPolicy.SORTED_QUAD_STREAM, true, true),
+        EYES(ShaderMode.EMISSIVE, SubmissionPolicy.SORTED_QUAD_STREAM, false, true),
         WATER_MASK(ShaderMode.WATER_MASK, SubmissionPolicy.OPAQUE_BATCHED, false, true),
         GLINT(ShaderMode.GLINT, SubmissionPolicy.SORTED_QUAD_STREAM, true, false),
         CRUMBLING(ShaderMode.CRUMBLING, SubmissionPolicy.SORTED_QUAD_STREAM, true, false),
@@ -185,11 +183,7 @@ public record RenderLayer1211Descriptor(
         private final boolean alphaCutout;
         private final boolean backendSupported;
 
-        Kind(
-                ShaderMode shaderMode,
-                SubmissionPolicy submissionPolicy,
-                boolean alphaCutout,
-                boolean backendSupported) {
+        Kind(ShaderMode shaderMode, SubmissionPolicy submissionPolicy, boolean alphaCutout, boolean backendSupported) {
             this.shaderMode = shaderMode;
             this.submissionPolicy = submissionPolicy;
             this.alphaCutout = alphaCutout;

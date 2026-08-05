@@ -53,6 +53,9 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     private int queuedInstances;
     private long submittedInstances;
     private long drawCalls;
+    private long sortedInstances;
+    private long sortedDrawCalls;
+    private long sortedQuads;
     private long meshUploads;
     private long instanceUploadCalls;
     private long boneUploadCalls;
@@ -118,15 +121,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                 .computeIfAbsent(layer, ignored -> new Batch())
                 .entries
                 .add(new Entry(
-                        handle,
-                        descriptor,
-                        pose,
-                        root,
-                        light,
-                        overlay,
-                        color,
-                        worldGeneration,
-                        resourceGeneration));
+                        handle, descriptor, pose, root, light, overlay, color, worldGeneration, resourceGeneration));
         queuedInstances++;
         return true;
     }
@@ -184,6 +179,9 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                 meshes.size(),
                 submittedInstances,
                 drawCalls,
+                sortedInstances,
+                sortedDrawCalls,
+                sortedQuads,
                 meshUploads,
                 instanceUploadCalls,
                 boneUploadCalls,
@@ -295,7 +293,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL30C.glBindVertexArray(0);
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, 0);
             meshUploads++;
-            return new MeshHandle(vao, vbo, ibo, mesh.indexCount(), mesh.partCount(), mesh.retainedBytes());
+            return new MeshHandle(vao, vbo, ibo, mesh.indexCount(), mesh.partCount(), mesh.retainedBytes(), mesh);
         } catch (Throwable failure) {
             if (vao != 0) GL30C.glDeleteVertexArrays(vao);
             if (vbo != 0) GL15C.glDeleteBuffers(vbo);
@@ -342,24 +340,22 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             keys[index] = entries.get(index).mesh;
         }
         RenderLayer1211Descriptor descriptor = entries.getFirst().descriptor;
-        boolean reorderable = descriptor.submissionPolicy()
-                == RenderLayer1211Descriptor.SubmissionPolicy.OPAQUE_BATCHED;
+        boolean sorted = descriptor.submissionPolicy() == RenderLayer1211Descriptor.SubmissionPolicy.SORTED_QUAD_STREAM;
+        boolean reorderable =
+                descriptor.submissionPolicy() == RenderLayer1211Descriptor.SubmissionPolicy.OPAQUE_BATCHED;
         InstanceSubmissionOrderPlanner.Plan plan = orderPlanner.plan(
-                sourceIndices,
-                entryCount,
-                keys,
-                entryCount,
-                0,
-                reorderable,
-                config.gpuBatchConsolidation());
+                sourceIndices, entryCount, keys, entryCount, 0, reorderable, config.gpuBatchConsolidation());
 
+        int[] packedIndexBySource = new int[entryCount];
         ByteBuffer instances =
                 instanceStaging.clear().limit(ModelPartLayouts.bytes(entryCount, ModelPartLayouts.INSTANCE_STRIDE));
         for (int packed = 0; packed < entryCount; packed++) {
             int source = plan.packedSourceIndices()[packed];
+            packedIndexBySource[source] = packed;
             putInstance(instances, entries.get(source), boneBaseBySource[source]);
         }
         instances.flip();
+        ArrayList<SortedModelPartQuads.Reference> sortedReferences = sorted ? collectSortedReferences(entries) : null;
 
         OpenGlStateSnapshot1211 previous = OpenGlStateSnapshot1211.capture();
         boolean layerStarted = false;
@@ -395,16 +391,23 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             instanceUploadCalls++;
             instanceBytes = Math.addExact(instanceBytes, instances.remaining());
 
-            for (int batch = 0; batch < plan.batchCount(); batch++) {
-                int representative = plan.representativeSourceIndices()[batch];
-                MeshHandle mesh = entries.get(representative).mesh;
-                int firstInstance = plan.firstPackedInstances()[batch];
-                int instanceCount = plan.instanceCounts()[batch];
-                GL30C.glBindVertexArray(mesh.vao);
-                bindInstanceRange(firstInstance);
-                GL31C.glDrawElementsInstanced(
-                        GL11C.GL_TRIANGLES, mesh.indexCount, GL11C.GL_UNSIGNED_INT, 0L, instanceCount);
-                drawCalls++;
+            if (sorted) {
+                drawSorted(entries, sortedReferences, packedIndexBySource);
+                sortedInstances = Math.addExact(sortedInstances, entryCount);
+                sortedDrawCalls = Math.addExact(sortedDrawCalls, sortedReferences.size());
+                sortedQuads = Math.addExact(sortedQuads, sortedReferences.size());
+            } else {
+                for (int batch = 0; batch < plan.batchCount(); batch++) {
+                    int representative = plan.representativeSourceIndices()[batch];
+                    MeshHandle mesh = entries.get(representative).mesh;
+                    int firstInstance = plan.firstPackedInstances()[batch];
+                    int instanceCount = plan.instanceCounts()[batch];
+                    GL30C.glBindVertexArray(mesh.vao);
+                    bindInstanceRange(firstInstance);
+                    GL31C.glDrawElementsInstanced(
+                            GL11C.GL_TRIANGLES, mesh.indexCount, GL11C.GL_UNSIGNED_INT, 0L, instanceCount);
+                    drawCalls++;
+                }
             }
             submittedInstances = Math.addExact(submittedInstances, entryCount);
             if (states.state() == ModelPartBackendState.READY) {
@@ -418,6 +421,41 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         } finally {
             if (layerStarted) layer.endDrawing();
             previous.restore();
+        }
+    }
+
+    private static ArrayList<SortedModelPartQuads.Reference> collectSortedReferences(ArrayList<Entry> entries) {
+        ArrayList<SortedModelPartQuads.Reference> references = new ArrayList<>();
+        long sequence = 0;
+        for (int source = 0; source < entries.size(); source++) {
+            Entry entry = entries.get(source);
+            ImmutableModelPartMesh mesh = entry.mesh.source;
+            for (int quad = 0; quad < mesh.quadCount(); quad++) {
+                int firstVertex = Math.multiplyExact(quad, 4);
+                int bone = mesh.vertexFieldBits(firstVertex, ImmutableModelPartMesh.BONE_INDEX);
+                if (!entry.pose.drawVisible(bone)) continue;
+                references.add(SortedModelPartQuads.reference(source, quad, sequence++, mesh, entry.pose, entry.root));
+            }
+        }
+        SortedModelPartQuads.sort(references);
+        return references;
+    }
+
+    private void drawSorted(
+            ArrayList<Entry> entries, ArrayList<SortedModelPartQuads.Reference> references, int[] packedIndexBySource) {
+        int boundVao = -1;
+        for (SortedModelPartQuads.Reference reference : references) {
+            int source = reference.sourceIndex();
+            Entry entry = entries.get(source);
+            MeshHandle mesh = entry.mesh;
+            if (mesh.vao != boundVao) {
+                GL30C.glBindVertexArray(mesh.vao);
+                boundVao = mesh.vao;
+            }
+            bindInstanceRange(packedIndexBySource[source]);
+            long indexOffset = (long) reference.quadIndex() * 6L * Integer.BYTES;
+            GL31C.glDrawElementsInstanced(GL11C.GL_TRIANGLES, 6, GL11C.GL_UNSIGNED_INT, indexOffset, 1);
+            drawCalls++;
         }
     }
 
@@ -630,7 +668,8 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             long worldGeneration,
             long resourceGeneration) {}
 
-    private record MeshHandle(int vao, int vbo, int ibo, int indexCount, int boneCount, long bytes) {
+    private record MeshHandle(
+            int vao, int vbo, int ibo, int indexCount, int boneCount, long bytes, ImmutableModelPartMesh source) {
         private void delete() {
             GL30C.glDeleteVertexArrays(vao);
             GL15C.glDeleteBuffers(vbo);
@@ -644,6 +683,9 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             int uploadedMeshes,
             long submittedInstances,
             long drawCalls,
+            long sortedInstances,
+            long sortedDrawCalls,
+            long sortedQuads,
             long meshUploads,
             long instanceUploadCalls,
             long boneUploadCalls,
@@ -653,10 +695,10 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             return new ModelPartFlushStats(
                     Math.toIntExact(Math.min(Integer.MAX_VALUE, submittedInstances)),
                     Math.toIntExact(Math.min(Integer.MAX_VALUE, drawCalls)),
-                    Math.toIntExact(Math.min(Integer.MAX_VALUE, submittedInstances)),
-                    Math.toIntExact(Math.min(Integer.MAX_VALUE, drawCalls)),
-                    0,
-                    0,
+                    Math.toIntExact(Math.min(Integer.MAX_VALUE, submittedInstances - sortedInstances)),
+                    Math.toIntExact(Math.min(Integer.MAX_VALUE, drawCalls - sortedDrawCalls)),
+                    Math.toIntExact(Math.min(Integer.MAX_VALUE, sortedInstances)),
+                    Math.toIntExact(Math.min(Integer.MAX_VALUE, sortedDrawCalls)),
                     0,
                     0,
                     0,
