@@ -25,7 +25,7 @@ loom {
     splitEnvironmentSourceSets()
     runs {
         client {
-            runDir = 'run-1.21.1'
+            runDir = 'run-1.20.1'
         }
     }
     mods {
@@ -36,8 +36,8 @@ loom {
     }
 }
 
-// Keep the completed 26.2 implementation intact while the 1.21.1 port is rebuilt
-// behind a minimal, compiling pass-through source set.
+// The 1.20.1 port starts from the validated legacy-renderer source tree. The directory name is
+// retained temporarily so the API adaptation can be validated without a noisy whole-tree move.
 sourceSets {
     main {
         java.setSrcDirs(['src/backport1211/main/java'])
@@ -89,7 +89,7 @@ spotless {
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
+        languageVersion = JavaLanguageVersion.of(17)
     }
     withSourcesJar()
 }
@@ -101,7 +101,7 @@ tasks.withType(Jar).configureEach {
 }
 
 tasks.withType(JavaCompile).configureEach {
-    options.release = 21
+    options.release = 17
     options.encoding = 'UTF-8'
 }
 
