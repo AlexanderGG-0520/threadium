@@ -3,6 +3,8 @@ package dev.alex.threadium.render.modelpart;
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.alex.threadium.config.ThreadiumConfig;
 import dev.alex.threadium.config.ThreadiumRuntimeConfig;
+import dev.alex.threadium.mixin.accessor.RenderSystemAccessor;
+import dev.alex.threadium.render.modelpart.material.RenderLayer1211Descriptor;
 import dev.alex.threadium.render.modelpart.pose.ImmutableModelPartBonePose;
 import dev.alex.threadium.render.modelpart.pose.ImmutableRootRenderTransform;
 import dev.alex.threadium.render.modelpart.structure.ImmutableModelPartMesh;
@@ -16,6 +18,7 @@ import java.util.IdentityHashMap;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumerProvider;
 import org.joml.Matrix4fc;
+import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11C;
 import org.lwjgl.opengl.GL13C;
 import org.lwjgl.opengl.GL15C;
@@ -68,7 +71,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
 
     public boolean queue(
             Object provider,
-            RenderLayer layer,
+            RenderLayer1211Descriptor descriptor,
             ImmutableModelPartMesh mesh,
             ImmutableModelPartBonePose pose,
             ImmutableRootRenderTransform root,
@@ -78,8 +81,11 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             long worldGeneration,
             long resourceGeneration) {
         requireOpenRenderThread();
+        RenderLayer layer = descriptor == null ? null : descriptor.layer();
         if (!configured()
                 || !(provider instanceof VertexConsumerProvider.Immediate)
+                || descriptor == null
+                || !descriptor.replacementSafe()
                 || layer == null
                 || mesh == null
                 || pose == null
@@ -113,6 +119,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                 .entries
                 .add(new Entry(
                         handle,
+                        descriptor,
                         pose,
                         root,
                         light,
@@ -229,8 +236,8 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
 
             boneStaging =
                     MemoryUtil.memAlloc(ModelPartLayouts.bytes(maximumUploadedBones, ModelPartLayouts.BONE_STRIDE));
-            instanceStaging =
-                    MemoryUtil.memAlloc(ModelPartLayouts.bytes(maximumQueuedInstances, ModelPartLayouts.INSTANCE_STRIDE));
+            instanceStaging = MemoryUtil.memAlloc(
+                    ModelPartLayouts.bytes(maximumQueuedInstances, ModelPartLayouts.INSTANCE_STRIDE));
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, 0);
             GL11C.glBindTexture(GL31C.GL_TEXTURE_BUFFER, 0);
             states.transition(ModelPartBackendState.INITIALIZING, ModelPartBackendState.READY);
@@ -334,7 +341,9 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             sourceIndices[index] = index;
             keys[index] = entries.get(index).mesh;
         }
-        boolean reorderable = !layer.isTranslucent();
+        RenderLayer1211Descriptor descriptor = entries.getFirst().descriptor;
+        boolean reorderable = descriptor.submissionPolicy()
+                == RenderLayer1211Descriptor.SubmissionPolicy.OPAQUE_BATCHED;
         InstanceSubmissionOrderPlanner.Plan plan = orderPlanner.plan(
                 sourceIndices,
                 entryCount,
@@ -360,7 +369,9 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL20C.glUseProgram(program);
             setMatrix(program, "uProjection", RenderSystem.getProjectionMatrix());
             setMatrix(program, "uModelView", RenderSystem.getModelViewMatrix());
+            setMatrix(program, "uTextureMatrix", RenderSystem.getTextureMatrix());
             bindTextures(program);
+            applyVanillaUniforms(program, descriptor);
 
             GL13C.glActiveTexture(GL13C.GL_TEXTURE3);
             GL11C.glBindTexture(GL31C.GL_TEXTURE_BUFFER, boneTexture);
@@ -443,12 +454,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, instanceBuffer);
         for (int column = 0; column < 4; column++) {
             GL20C.glVertexAttribPointer(
-                    4 + column,
-                    4,
-                    GL11C.GL_FLOAT,
-                    false,
-                    ModelPartLayouts.INSTANCE_STRIDE,
-                    base + column * 16L);
+                    4 + column, 4, GL11C.GL_FLOAT, false, ModelPartLayouts.INSTANCE_STRIDE, base + column * 16L);
         }
         GL30C.glVertexAttribIPointer(
                 8,
@@ -457,17 +463,9 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                 ModelPartLayouts.INSTANCE_STRIDE,
                 base + ModelPartLayouts.INSTANCE_BONE_BASE_OFFSET);
         GL30C.glVertexAttribIPointer(
-                9,
-                1,
-                GL11C.GL_INT,
-                ModelPartLayouts.INSTANCE_STRIDE,
-                base + ModelPartLayouts.INSTANCE_LIGHT_OFFSET);
+                9, 1, GL11C.GL_INT, ModelPartLayouts.INSTANCE_STRIDE, base + ModelPartLayouts.INSTANCE_LIGHT_OFFSET);
         GL30C.glVertexAttribIPointer(
-                10,
-                1,
-                GL11C.GL_INT,
-                ModelPartLayouts.INSTANCE_STRIDE,
-                base + ModelPartLayouts.INSTANCE_OVERLAY_OFFSET);
+                10, 1, GL11C.GL_INT, ModelPartLayouts.INSTANCE_STRIDE, base + ModelPartLayouts.INSTANCE_OVERLAY_OFFSET);
         GL20C.glVertexAttribPointer(
                 11,
                 4,
@@ -486,9 +484,50 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         }
     }
 
-    private static void setMatrix(int program, String name, Matrix4fc matrix) {
+    private static void applyVanillaUniforms(int program, RenderLayer1211Descriptor descriptor) {
+        Vector3f[] lights = RenderSystemAccessor.threadium$getShaderLightDirections();
+        if (lights == null || lights.length < 2 || lights[0] == null || lights[1] == null) {
+            throw new IllegalStateException("Vanilla shader light directions are unavailable");
+        }
+        setVector3(program, "uLight0Direction", lights[0]);
+        setVector3(program, "uLight1Direction", lights[1]);
+        float[] shaderColor = RenderSystem.getShaderColor();
+        setVector4(program, "uColorModulator", shaderColor[0], shaderColor[1], shaderColor[2], shaderColor[3]);
+        float[] fogColor = RenderSystem.getShaderFogColor();
+        setVector4(program, "uFogColor", fogColor[0], fogColor[1], fogColor[2], fogColor[3]);
+        setFloat(program, "uFogStart", RenderSystem.getShaderFogStart());
+        setFloat(program, "uFogEnd", RenderSystem.getShaderFogEnd());
+        setFloat(program, "uGlintAlpha", RenderSystem.getShaderGlintAlpha());
+        setInt(program, "uFogShape", RenderSystem.getShaderFogShape().getId());
+        setInt(program, "uShaderMode", descriptor.shaderMode().uniformValue());
+        setInt(program, "uAlphaCutout", descriptor.alphaCutout() ? 1 : 0);
+    }
+
+    private static void setVector3(int program, String name, Vector3f value) {
+        int location = uniform(program, name);
+        GL20C.glUniform3f(location, value.x(), value.y(), value.z());
+    }
+
+    private static void setVector4(int program, String name, float x, float y, float z, float w) {
+        GL20C.glUniform4f(uniform(program, name), x, y, z, w);
+    }
+
+    private static void setFloat(int program, String name, float value) {
+        GL20C.glUniform1f(uniform(program, name), value);
+    }
+
+    private static void setInt(int program, String name, int value) {
+        GL20C.glUniform1i(uniform(program, name), value);
+    }
+
+    private static int uniform(int program, String name) {
         int location = GL20C.glGetUniformLocation(program, name);
         if (location < 0) throw new IllegalStateException("Missing Threadium shader uniform " + name);
+        return location;
+    }
+
+    private static void setMatrix(int program, String name, Matrix4fc matrix) {
+        int location = uniform(program, name);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             FloatBuffer values = stack.mallocFloat(16);
             matrix.get(values);
@@ -582,6 +621,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
 
     private record Entry(
             MeshHandle mesh,
+            RenderLayer1211Descriptor descriptor,
             ImmutableModelPartBonePose pose,
             ImmutableRootRenderTransform root,
             int light,

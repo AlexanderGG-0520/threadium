@@ -12,6 +12,7 @@
     "accessor.RenderLayerMultiPhaseAccessor",
     "accessor.RenderLayerMultiPhaseParametersAccessor",
     "accessor.RenderPhaseTextureAccessor",
+    "accessor.RenderSystemAccessor",
     "compat.ImmediatelyFastBatchableBufferSourceMixin"
   ],
   "injectors": {

@@ -7,56 +7,49 @@ import org.junit.jupiter.api.Test;
 
 class ReplacementAdmissionPolicyTest {
     @Test
-    void exactImmediateMaterialIsAllowed() {
+    void exactSupportedImmediateMaterialIsAllowed() {
         assertTrue(policy(MaterialResolutionStatus.DIRECT_UNIQUE, MaterialProviderSource.IMMEDIATE).allowed());
     }
 
     @Test
-    void exactImmediatelyFastMaterialIsAllowed() {
+    void exactSupportedImmediatelyFastMaterialIsAllowed() {
         assertTrue(policy(MaterialResolutionStatus.DIRECT_UNIQUE, MaterialProviderSource.IMMEDIATELY_FAST).allowed());
     }
 
     @Test
-    void outlineProviderIsNeverTrustedForSuppression() {
+    void outlineProviderRequiresSeparateColorAndDrawerProof() {
         assertFalse(policy(MaterialResolutionStatus.DIRECT_UNIQUE, MaterialProviderSource.OUTLINE).allowed());
+        assertFalse(new ReplacementAdmissionPolicy(
+                        MaterialResolutionStatus.DIRECT_UNIQUE,
+                        MaterialProviderSource.IMMEDIATE,
+                        false,
+                        true,
+                        true,
+                        true,
+                        false)
+                .allowed());
     }
 
     @Test
-    void reboundAndUnresolvedMaterialsFallBack() {
+    void reboundUnresolvedUnknownAndUnimplementedMaterialsFallBack() {
         assertFalse(new ReplacementAdmissionPolicy(
                         MaterialResolutionStatus.DIRECT_REBOUND,
                         MaterialProviderSource.IMMEDIATE,
                         true,
                         true,
                         true,
-                        false,
-                        false,
-                        false)
+                        true,
+                        true)
                 .allowed());
         assertFalse(policy(MaterialResolutionStatus.UNRESOLVED, MaterialProviderSource.UNAVAILABLE).allowed());
-    }
-
-    @Test
-    void everyUnprovenRenderPropertyFallsBack() {
         assertFalse(new ReplacementAdmissionPolicy(
                         MaterialResolutionStatus.DIRECT_UNIQUE,
                         MaterialProviderSource.IMMEDIATE,
                         false,
                         false,
                         true,
-                        false,
-                        false,
-                        false)
-                .allowed());
-        assertFalse(new ReplacementAdmissionPolicy(
-                        MaterialResolutionStatus.DIRECT_UNIQUE,
-                        MaterialProviderSource.IMMEDIATE,
-                        false,
                         true,
-                        false,
-                        false,
-                        false,
-                        false)
+                        true)
                 .allowed());
         assertFalse(new ReplacementAdmissionPolicy(
                         MaterialResolutionStatus.DIRECT_UNIQUE,
@@ -64,27 +57,6 @@ class ReplacementAdmissionPolicyTest {
                         false,
                         true,
                         true,
-                        true,
-                        false,
-                        false)
-                .allowed());
-        assertFalse(new ReplacementAdmissionPolicy(
-                        MaterialResolutionStatus.DIRECT_UNIQUE,
-                        MaterialProviderSource.IMMEDIATE,
-                        false,
-                        true,
-                        true,
-                        false,
-                        true,
-                        false)
-                .allowed());
-        assertFalse(new ReplacementAdmissionPolicy(
-                        MaterialResolutionStatus.DIRECT_UNIQUE,
-                        MaterialProviderSource.IMMEDIATE,
-                        false,
-                        true,
-                        true,
-                        false,
                         false,
                         true)
                 .allowed());
@@ -92,6 +64,6 @@ class ReplacementAdmissionPolicyTest {
 
     private static ReplacementAdmissionPolicy policy(
             MaterialResolutionStatus status, MaterialProviderSource providerSource) {
-        return new ReplacementAdmissionPolicy(status, providerSource, false, true, true, false, false, false);
+        return new ReplacementAdmissionPolicy(status, providerSource, false, true, true, true, true);
     }
 }

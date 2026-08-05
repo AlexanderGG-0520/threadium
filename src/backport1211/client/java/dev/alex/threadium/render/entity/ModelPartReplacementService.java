@@ -64,8 +64,7 @@ public final class ModelPartReplacementService {
     }
 
     public static boolean gpuConfigured() {
-        return ThreadiumRuntimeConfig.current().gpuReplacementEnabled()
-                && ModelPartGpuInstanceBackend.configured();
+        return ThreadiumRuntimeConfig.current().gpuReplacementEnabled() && ModelPartGpuInstanceBackend.configured();
     }
 
     public static void beginFrame() {
@@ -215,17 +214,18 @@ public final class ModelPartReplacementService {
         if (pose.drawVisibleCount() == 0) return accept("empty validated instance");
         if (gpuConfigured()) {
             try {
-                if (!gpuBackend().queue(
-                        material.provider(),
-                        descriptor.layer(),
-                        mesh,
-                        pose,
-                        rootTransform,
-                        light,
-                        overlay,
-                        color,
-                        worldGeneration,
-                        resourceGeneration)) {
+                if (!gpuBackend()
+                        .queue(
+                                material.provider(),
+                                descriptor,
+                                mesh,
+                                pose,
+                                rootTransform,
+                                light,
+                                overlay,
+                                color,
+                                worldGeneration,
+                                resourceGeneration)) {
                     return fallback();
                 }
                 return accept("Threadium-owned GPU instance queue");
