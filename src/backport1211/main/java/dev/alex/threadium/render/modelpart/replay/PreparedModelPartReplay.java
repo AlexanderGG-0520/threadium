@@ -10,7 +10,8 @@ import java.util.Objects;
  * Fully validated, Minecraft-object-free vertex replay prepared before any destination consumer is mutated.
  *
  * <p>The packed float layout is position xyz, texture uv, and normal xyz. Color, overlay, and light are immutable
- * invocation values shared by all prepared vertices.
+ * invocation values shared by all prepared vertices. Minecraft 1.20.1 forwards transformed normals without a final
+ * normalization step, so replay preserves the exact transformed values.
  */
 public final class PreparedModelPartReplay {
     public static final int FLOATS_PER_VERTEX = 8;
@@ -78,18 +79,6 @@ public final class PreparedModelPartReplay {
             float outputNormalX = transformNormalX(root, boneNormalX, boneNormalY, boneNormalZ);
             float outputNormalY = transformNormalY(root, boneNormalX, boneNormalY, boneNormalZ);
             float outputNormalZ = transformNormalZ(root, boneNormalX, boneNormalY, boneNormalZ);
-            if (pose.normalNeedsNormalization(bone) || root.normalNeedsNormalization()) {
-                float squaredLength = outputNormalX * outputNormalX
-                        + outputNormalY * outputNormalY
-                        + outputNormalZ * outputNormalZ;
-                if (!(squaredLength > 0.0F) || !Float.isFinite(squaredLength)) {
-                    throw new IllegalArgumentException("ModelPart replay normal cannot be normalized");
-                }
-                float inverseLength = (float) (1.0D / Math.sqrt(squaredLength));
-                outputNormalX *= inverseLength;
-                outputNormalY *= inverseLength;
-                outputNormalZ *= inverseLength;
-            }
 
             int offset = Math.multiplyExact(outputVertex++, FLOATS_PER_VERTEX);
             prepared[offset + POSITION_X] = requireFinite(outputX);
