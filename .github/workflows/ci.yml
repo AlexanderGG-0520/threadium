@@ -33,3 +33,22 @@ jobs:
 
       - name: Validate Java 21 backport
         run: gradle --no-daemon clean spotlessApply spotlessCheck test build
+
+      - name: Upload validation workspace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mc1211-validation-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 3
+          path: |
+            src/backport1211
+            build.gradle
+            gradle.properties
+            settings.gradle
+            gradle
+            gradlew
+            gradlew.bat
+            build/reports
+            build/test-results
+            build/libs
