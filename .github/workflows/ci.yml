@@ -43,9 +43,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/minecraft-sources
-          find "$HOME/.gradle" -type f \( -name '*1.21.1*sources*.jar' -o -name '*minecraft*sources*.jar' \) \
-            -print -exec cp -n '{}' build/minecraft-sources/ \; \
-            > build/minecraft-sources/candidates.txt
+          : > build/minecraft-sources/candidates.txt
+          while IFS= read -r archive; do
+            printf '%s\n' "$archive" >> build/minecraft-sources/candidates.txt
+            cp -n "$archive" "build/minecraft-sources/$(basename "$archive")"
+          done < <(find "$HOME/.gradle/caches/fabric-loom" "$GITHUB_WORKSPACE/.gradle" \
+            -type f -name '*sources*.jar' 2>/dev/null | sort -u)
 
       - name: Collect 26.2 reference sources
         if: always()
