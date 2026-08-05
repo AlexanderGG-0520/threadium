@@ -1,0 +1,71 @@
+name: Minecraft 1.21.1 crumbling reference
+
+on:
+  push:
+    branches:
+      - agent/mc1211-crumbling-reference
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out reference branch
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "25"
+
+      - name: Set up Gradle 9.6.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.1"
+
+      - name: Generate mapped Minecraft sources
+        run: gradle --no-daemon genSources
+
+      - name: Extract decal sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf tmp/crumbling-reference
+          mkdir -p tmp/crumbling-reference/sources
+
+          found=0
+          while IFS= read -r jar; do
+            while IFS= read -r source; do
+              case "$source" in
+                *SheetedDecalTextureGenerator.java|*OverlayVertexConsumer.java|*VertexConsumer.java|*RenderLayer.java|*RenderPhase.java)
+                  content="$(unzip -p "$jar" "$source" 2>/dev/null || true)"
+                  if grep -Eq 'SheetedDecalTextureGenerator|textureScale|getFacing|rotationDegrees|Direction' <<<"$content"; then
+                    target="tmp/crumbling-reference/sources/${source//\//__}"
+                    printf '%s' "$content" > "$target"
+                    found=1
+                  fi
+                  ;;
+              esac
+            done < <(unzip -Z1 "$jar" 2>/dev/null | grep '\.java$' || true)
+          done < <(find "$HOME/.gradle/caches" -type f -name '*sources*.jar' -print)
+          test "$found" -eq 1
+
+          printf 'generated_at=%s\n' "$(date -u +%FT%TZ)" > tmp/crumbling-reference/origin.txt
+
+      - name: Publish reference files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add tmp/crumbling-reference
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'chore: capture Minecraft 1.21.1 crumbling references'
+          git push origin HEAD:agent/mc1211-crumbling-reference
