@@ -6,6 +6,7 @@ import net.minecraft.client.render.VertexConsumer;
 
 /** Threadium-owned wrapper that isolates replay emission from Vanilla's original consumer. */
 public final class ThreadiumReplayVertexConsumer implements VertexConsumer {
+    private static final float CHANNEL_SCALE = 1.0F / 255.0F;
     private final VertexConsumer delegate;
 
     public ThreadiumReplayVertexConsumer(VertexConsumer delegate) {
@@ -14,12 +15,20 @@ public final class ThreadiumReplayVertexConsumer implements VertexConsumer {
 
     public void replay(PreparedModelPartReplay replay) {
         Objects.requireNonNull(replay, "replay");
+        int color = replay.color();
+        float alpha = (color >>> 24 & 0xFF) * CHANNEL_SCALE;
+        float red = (color >>> 16 & 0xFF) * CHANNEL_SCALE;
+        float green = (color >>> 8 & 0xFF) * CHANNEL_SCALE;
+        float blue = (color & 0xFF) * CHANNEL_SCALE;
         for (int vertex = 0; vertex < replay.vertexCount(); vertex++) {
             delegate.vertex(
                     replay.field(vertex, PreparedModelPartReplay.POSITION_X),
                     replay.field(vertex, PreparedModelPartReplay.POSITION_Y),
                     replay.field(vertex, PreparedModelPartReplay.POSITION_Z),
-                    replay.color(),
+                    red,
+                    green,
+                    blue,
+                    alpha,
                     replay.field(vertex, PreparedModelPartReplay.TEXTURE_U),
                     replay.field(vertex, PreparedModelPartReplay.TEXTURE_V),
                     replay.overlay(),
