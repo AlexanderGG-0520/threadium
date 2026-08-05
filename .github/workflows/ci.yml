@@ -43,7 +43,6 @@ jobs:
           git fetch --no-tags --depth=1 origin mc26.2/fabric/dev
           git archive origin/mc26.2/fabric/dev \
             src/main/java/dev/alex/threadium \
-            src/main/resources \
             src/client/java/dev/alex/threadium \
             src/client/resources \
             src/test/java/dev/alex/threadium \
