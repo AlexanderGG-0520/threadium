@@ -15,7 +15,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -33,6 +33,19 @@ jobs:
 
       - name: Validate Java 21 backport
         run: gradle --no-daemon clean spotlessApply spotlessCheck test build
+
+      - name: Generate mapped Minecraft sources
+        run: gradle --no-daemon genSources
+
+      - name: Collect 1.21.1 mapped source jars
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/minecraft-sources
+          find "$HOME/.gradle" -type f \( -name '*1.21.1*sources*.jar' -o -name '*minecraft*sources*.jar' \) \
+            -print -exec cp -n '{}' build/minecraft-sources/ \; \
+            > build/minecraft-sources/candidates.txt
 
       - name: Collect 26.2 reference sources
         if: always()
@@ -65,6 +78,7 @@ jobs:
             gradle
             gradlew
             gradlew.bat
+            build/minecraft-sources
             build/reference-26.2
             build/reports
             build/test-results
