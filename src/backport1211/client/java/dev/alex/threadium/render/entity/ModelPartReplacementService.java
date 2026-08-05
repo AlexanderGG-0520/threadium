@@ -8,6 +8,8 @@ import dev.alex.threadium.mixin.accessor.OutlineVertexConsumerAccessor;
 import dev.alex.threadium.mixin.accessor.OverlayVertexConsumerAccessor;
 import dev.alex.threadium.mixin.accessor.VertexConsumersDualAccessor;
 import dev.alex.threadium.render.modelpart.AdaptiveModelPartBatchGate;
+import dev.alex.threadium.render.modelpart.ModelPart1211Metrics;
+import dev.alex.threadium.render.modelpart.ModelPart1211Metrics.FallbackReason;
 import dev.alex.threadium.render.modelpart.ModelPartDecalTransform1211;
 import dev.alex.threadium.render.modelpart.ModelPartGpuInstanceBackend;
 import dev.alex.threadium.render.modelpart.material.MaterialContextResolution;
@@ -48,6 +50,7 @@ public final class ModelPartReplacementService {
     private final AtomicLong replacementAccepts = new AtomicLong();
     private final AtomicLong replacementFallbacks = new AtomicLong();
     private final AtomicLong replacementFailures = new AtomicLong();
+    private final ModelPart1211Metrics metrics = new ModelPart1211Metrics();
     private final AdaptiveModelPartBatchGate batchProfitability = new AdaptiveModelPartBatchGate();
     private final ArrayDeque<Object> renderGroupOwners = new ArrayDeque<>();
     private ModelPartGpuInstanceBackend gpuBackend;
@@ -55,6 +58,8 @@ public final class ModelPartReplacementService {
     private long resourceGeneration;
     private int renderDepth;
     private int minimumGroupSubmits = 1;
+    private long metricsOutputIntervalNanos = 30_000_000_000L;
+    private long lastMetricsReportNanos = System.nanoTime();
     private long appliedConfigurationRevision = -1;
     private boolean runtimeEnabled;
     private boolean replacementLogged;
@@ -102,6 +107,7 @@ public final class ModelPartReplacementService {
                 current.disableAfterFailure("GPU flush boundary validation", exception);
             }
         }
+        current.reportMetricsIfDue();
         current.renderDepth = 0;
         current.renderGroupOwners.clear();
         current.batchProfitability.beginFrame();
@@ -113,6 +119,7 @@ public final class ModelPartReplacementService {
             MaterialProviderSource source, Object provider, RenderLayer layer, VertexConsumer consumer) {
         ModelPartReplacementService current = instance;
         if (current == null || !current.runtimeEnabled || !current.isRenderThread()) return;
+        current.metrics.recordMaterialProviderRequest();
         try {
             current.materialTracker.register(provider, layer, consumer, source);
         } catch (RuntimeException exception) {
@@ -124,6 +131,7 @@ public final class ModelPartReplacementService {
         ModelPartReplacementService current = instance;
         if (current == null || !current.runtimeEnabled || groupOwner == null || !current.isRenderThread()) return;
         current.renderGroupOwners.addLast(groupOwner);
+        current.metrics.recordGroupBegin();
     }
 
     public static void endRenderGroup(Object groupOwner) {
@@ -131,12 +139,14 @@ public final class ModelPartReplacementService {
         if (current == null || !current.runtimeEnabled || groupOwner == null || !current.isRenderThread()) return;
         if (current.renderGroupOwners.isEmpty() || current.renderGroupOwners.getLast() != groupOwner) {
             current.renderGroupOwners.clear();
+            current.metrics.recordGroupScopeFailure();
             current.disableAfterFailure(
                     "feature renderer group scope",
                     new IllegalStateException("Threadium observed an unbalanced Minecraft 1.21.1 render group"));
             return;
         }
         current.renderGroupOwners.removeLast();
+        current.metrics.recordGroupEnd();
     }
 
     public static boolean beginModelPartRender(
@@ -207,177 +217,253 @@ public final class ModelPartReplacementService {
                         0,
                         0)
                 : current.gpuBackend.diagnostics();
-        return current == null
-                ? new Diagnostics(configured(), gpuConfigured(), false, 0, 0, 0, 0, gpu)
-                : new Diagnostics(
-                        configured(),
-                        gpuConfigured(),
-                        current.runtimeEnabled,
-                        current.replacementAttempts.get(),
-                        current.replacementAccepts.get(),
-                        current.replacementFallbacks.get(),
-                        current.replacementFailures.get(),
-                        gpu);
+        if (current == null) {
+            ModelPartMaterialContextTracker<Object, RenderLayer, VertexConsumer> tracker =
+                    new ModelPartMaterialContextTracker<>();
+            return new Diagnostics(
+                    configured(),
+                    gpuConfigured(),
+                    false,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    tracker.diagnostics(),
+                    new ModelPart1211Metrics().snapshot(),
+                    gpu);
+        }
+        return new Diagnostics(
+                configured(),
+                gpuConfigured(),
+                current.runtimeEnabled,
+                current.replacementAttempts.get(),
+                current.replacementAccepts.get(),
+                current.replacementFallbacks.get(),
+                current.replacementFailures.get(),
+                current.renderGroupOwners.size(),
+                current.structureInspector.cachedRootCount(),
+                current.structureInspector.uniqueMeshCount(),
+                current.structureInspector.retainedMeshBytes(),
+                current.poseInspector.uniquePoseCount(),
+                current.poseInspector.retainedPoseBytes(),
+                current.materialTracker.diagnostics(),
+                current.metrics.snapshot(),
+                gpu);
+    }
+
+    public static ModelPart1211Metrics.Snapshot metricsSnapshot() {
+        ModelPartReplacementService current = instance;
+        return current == null ? new ModelPart1211Metrics().snapshot() : current.metrics.snapshot();
+    }
+
+    public static ModelPart1211Metrics.Snapshot metricsSnapshotAndReset() {
+        ModelPartReplacementService current = instance;
+        return current == null ? new ModelPart1211Metrics().snapshot() : current.metrics.snapshotAndReset();
     }
 
     private boolean tryReplace(
             ModelPart root, MatrixStack matrices, VertexConsumer consumer, int light, int overlay, int color) {
         replacementAttempts.incrementAndGet();
-        if (!isRenderThread()) return fallback();
-
-        boolean gpuReplacement = gpuConfigured();
-        Object groupOwner = currentRenderGroupOwner();
-        if (gpuReplacement && groupOwner == null) return fallback();
-
-        MaterialPath materialPath;
-        ImmutableModelPartMesh mesh;
-        ImmutableRootRenderTransform rootTransform;
-        ImmutableModelPartBonePose pose;
+        metrics.recordReplacementAttempt();
+        long interceptStart = metrics.now();
+        long materialNanos = 0L;
+        long meshNanos = 0L;
+        long poseNanos = 0L;
+        long queueNanos = 0L;
         try {
-            materialPath = resolveMaterialPath(consumer);
-            if (materialPath == null) return fallback();
-            if (gpuReplacement
-                    && !batchProfitability.observeAndShouldReplace(
-                            groupOwner, root, materialPath.batchType(), minimumGroupSubmits)) {
-                return fallback();
-            }
-            mesh = structureInspector.cached(root);
-            if (mesh == null) mesh = structureInspector.captureAndCache(root);
-            rootTransform = poseInspector.captureRoot(matrices.peek());
-            pose = poseInspector.capturePose(root, mesh).pose();
-            if (!pose.finite() || !rootTransform.finite() || pose.boneCount() != mesh.partCount()) {
-                throw new IllegalArgumentException("ModelPart instance input is not finite or structurally aligned");
-            }
-        } catch (RuntimeException exception) {
-            replacementFailures.incrementAndGet();
-            warnFailureOnce("preparation", exception);
-            return fallback();
-        }
+            if (!isRenderThread()) return fallback(FallbackReason.UNSCOPED, null);
 
-        if (pose.drawVisibleCount() == 0) return accept("empty validated instance");
-        if (materialPath.crumbling != null) {
-            if (!gpuReplacement) return fallback();
-            try {
-                ModelPartGpuInstanceBackend backend = gpuBackend();
-                boolean queued = materialPath.base == null
-                        ? backend.queue(
-                                groupOwner,
-                                materialPath.crumbling.provider,
-                                materialPath.crumbling.descriptor,
-                                mesh,
-                                pose,
-                                rootTransform,
-                                light,
-                                overlay,
-                                color,
-                                materialPath.decal,
-                                worldGeneration,
-                                resourceGeneration)
-                        : backend.queuePair(
-                                groupOwner,
-                                materialPath.base.provider,
-                                materialPath.base.descriptor,
-                                materialPath.crumbling.provider,
-                                materialPath.crumbling.descriptor,
-                                mesh,
-                                pose,
-                                rootTransform,
-                                light,
-                                overlay,
-                                color,
-                                materialPath.decal,
-                                worldGeneration,
-                                resourceGeneration);
-                if (!queued) return fallback();
-                return accept(
-                        materialPath.base == null
-                                ? "Threadium-owned crumbling decal queue"
-                                : "Threadium-owned atomic base and crumbling queues");
-            } catch (RuntimeException exception) {
-                disableAfterFailure("crumbling GPU queue commitment", exception);
-                return false;
-            }
-        }
+            boolean gpuReplacement = gpuConfigured();
+            Object groupOwner = currentRenderGroupOwner();
+            if (gpuReplacement && groupOwner == null) return fallback(FallbackReason.UNSCOPED, null);
 
-        if (materialPath.outline != null) {
-            if (!gpuReplacement) return fallback();
+            MaterialPath materialPath;
+            ImmutableModelPartMesh mesh;
+            ImmutableRootRenderTransform rootTransform;
+            ImmutableModelPartBonePose pose;
             try {
-                ModelPartGpuInstanceBackend backend = gpuBackend();
-                MaterialBinding outline = materialPath.outline.material;
-                boolean queued = materialPath.base == null
-                        ? backend.queue(
-                                groupOwner,
-                                outline.provider,
-                                outline.descriptor,
-                                mesh,
-                                pose,
-                                rootTransform,
-                                light,
-                                overlay,
-                                materialPath.outline.color,
-                                worldGeneration,
-                                resourceGeneration)
-                        : backend.queueOutlinePair(
-                                groupOwner,
-                                materialPath.base.provider,
-                                materialPath.base.descriptor,
-                                outline.provider,
-                                outline.descriptor,
-                                mesh,
-                                pose,
-                                rootTransform,
-                                light,
-                                overlay,
-                                color,
-                                materialPath.outline.color,
-                                worldGeneration,
-                                resourceGeneration);
-                if (!queued) return fallback();
-                return accept(
-                        materialPath.base == null
-                                ? "Threadium-owned outline queue"
-                                : "Threadium-owned atomic base and outline queues");
-            } catch (RuntimeException exception) {
-                disableAfterFailure("outline GPU queue commitment", exception);
-                return false;
-            }
-        }
-
-        MaterialBinding material = materialPath.base;
-        if (gpuReplacement) {
-            try {
-                if (!gpuBackend()
-                        .queue(
-                                groupOwner,
-                                material.provider,
-                                material.descriptor,
-                                mesh,
-                                pose,
-                                rootTransform,
-                                light,
-                                overlay,
-                                color,
-                                worldGeneration,
-                                resourceGeneration)) {
-                    return fallback();
+                long materialStart = metrics.now();
+                materialPath = resolveMaterialPath(consumer);
+                materialNanos = metrics.delta(materialStart);
+                if (materialPath == null) return fallback(FallbackReason.MATERIAL, null);
+                if (gpuReplacement
+                        && !batchProfitability.observeAndShouldReplace(
+                                groupOwner, root, materialPath.batchType(), minimumGroupSubmits)) {
+                    return fallback(FallbackReason.ADAPTIVE, materialPath);
                 }
-                return accept("Threadium-owned GPU instance queue");
-            } catch (RuntimeException exception) {
-                disableAfterFailure("GPU instance queue commitment", exception);
-                return false;
-            }
-        }
 
-        try {
-            ModelPartInvocationSnapshot invocation = new ModelPartInvocationSnapshot(
-                    mesh, pose, rootTransform, light, overlay, color, worldGeneration, resourceGeneration);
-            PreparedModelPartReplay replay = PreparedModelPartReplay.prepare(invocation);
-            ModelPartVertexReplayCommitter.commit(replay, consumer);
-        } catch (RuntimeException exception) {
-            disableAfterFailure("destination commit", exception);
-            return true;
+                long meshStart = metrics.now();
+                mesh = structureInspector.cached(root);
+                metrics.recordStructureLookup(mesh != null);
+                if (mesh == null) mesh = structureInspector.captureAndCache(root);
+                meshNanos = metrics.delta(meshStart);
+
+                long poseStart = metrics.now();
+                rootTransform = poseInspector.captureRoot(matrices.peek());
+                ModelPartPoseInspector.PoseObservation observation = poseInspector.capturePose(root, mesh);
+                pose = observation.pose();
+                metrics.recordPoseObservation(
+                        observation.lookupPerformed(), observation.poseCacheHit(), observation.directPacked());
+                poseNanos = metrics.delta(poseStart);
+                if (!pose.finite() || !rootTransform.finite() || pose.boneCount() != mesh.partCount()) {
+                    throw new IllegalArgumentException(
+                            "ModelPart instance input is not finite or structurally aligned");
+                }
+            } catch (RuntimeException exception) {
+                replacementFailures.incrementAndGet();
+                metrics.recordFailure();
+                warnFailureOnce("preparation", exception);
+                return fallback(FallbackReason.PREPARATION, null);
+            }
+
+            if (pose.drawVisibleCount() == 0) {
+                return accept("empty validated instance", true, false, false);
+            }
+            long queueStart = metrics.now();
+            if (materialPath.crumbling != null) {
+                if (!gpuReplacement) return fallback(FallbackReason.BACKEND_UNAVAILABLE, materialPath);
+                try {
+                    ModelPartGpuInstanceBackend backend = gpuBackend();
+                    boolean queued = materialPath.base == null
+                            ? backend.queue(
+                                    groupOwner,
+                                    materialPath.crumbling.provider,
+                                    materialPath.crumbling.descriptor,
+                                    mesh,
+                                    pose,
+                                    rootTransform,
+                                    light,
+                                    overlay,
+                                    color,
+                                    materialPath.decal,
+                                    worldGeneration,
+                                    resourceGeneration)
+                            : backend.queuePair(
+                                    groupOwner,
+                                    materialPath.base.provider,
+                                    materialPath.base.descriptor,
+                                    materialPath.crumbling.provider,
+                                    materialPath.crumbling.descriptor,
+                                    mesh,
+                                    pose,
+                                    rootTransform,
+                                    light,
+                                    overlay,
+                                    color,
+                                    materialPath.decal,
+                                    worldGeneration,
+                                    resourceGeneration);
+                    queueNanos = metrics.delta(queueStart);
+                    if (!queued) return fallback(FallbackReason.CAPACITY, materialPath);
+                    return accept(
+                            materialPath.base == null
+                                    ? "Threadium-owned crumbling decal queue"
+                                    : "Threadium-owned atomic base and crumbling queues",
+                            false,
+                            true,
+                            false);
+                } catch (RuntimeException exception) {
+                    disableAfterFailure("crumbling GPU queue commitment", exception);
+                    return false;
+                }
+            }
+
+            if (materialPath.outline != null) {
+                if (!gpuReplacement) return fallback(FallbackReason.BACKEND_UNAVAILABLE, materialPath);
+                try {
+                    ModelPartGpuInstanceBackend backend = gpuBackend();
+                    MaterialBinding outline = materialPath.outline.material;
+                    boolean queued = materialPath.base == null
+                            ? backend.queue(
+                                    groupOwner,
+                                    outline.provider,
+                                    outline.descriptor,
+                                    mesh,
+                                    pose,
+                                    rootTransform,
+                                    light,
+                                    overlay,
+                                    materialPath.outline.color,
+                                    worldGeneration,
+                                    resourceGeneration)
+                            : backend.queueOutlinePair(
+                                    groupOwner,
+                                    materialPath.base.provider,
+                                    materialPath.base.descriptor,
+                                    outline.provider,
+                                    outline.descriptor,
+                                    mesh,
+                                    pose,
+                                    rootTransform,
+                                    light,
+                                    overlay,
+                                    color,
+                                    materialPath.outline.color,
+                                    worldGeneration,
+                                    resourceGeneration);
+                    queueNanos = metrics.delta(queueStart);
+                    if (!queued) return fallback(FallbackReason.CAPACITY, materialPath);
+                    return accept(
+                            materialPath.base == null
+                                    ? "Threadium-owned outline queue"
+                                    : "Threadium-owned atomic base and outline queues",
+                            false,
+                            true,
+                            false);
+                } catch (RuntimeException exception) {
+                    disableAfterFailure("outline GPU queue commitment", exception);
+                    return false;
+                }
+            }
+
+            MaterialBinding material = materialPath.base;
+            if (gpuReplacement) {
+                try {
+                    if (!gpuBackend()
+                            .queue(
+                                    groupOwner,
+                                    material.provider,
+                                    material.descriptor,
+                                    mesh,
+                                    pose,
+                                    rootTransform,
+                                    light,
+                                    overlay,
+                                    color,
+                                    worldGeneration,
+                                    resourceGeneration)) {
+                        queueNanos = metrics.delta(queueStart);
+                        return fallback(FallbackReason.CAPACITY, materialPath);
+                    }
+                    queueNanos = metrics.delta(queueStart);
+                    return accept("Threadium-owned GPU instance queue", false, true, false);
+                } catch (RuntimeException exception) {
+                    disableAfterFailure("GPU instance queue commitment", exception);
+                    return false;
+                }
+            }
+
+            try {
+                ModelPartInvocationSnapshot invocation = new ModelPartInvocationSnapshot(
+                        mesh, pose, rootTransform, light, overlay, color, worldGeneration, resourceGeneration);
+                PreparedModelPartReplay replay = PreparedModelPartReplay.prepare(invocation);
+                ModelPartVertexReplayCommitter.commit(replay, consumer);
+                queueNanos = metrics.delta(queueStart);
+            } catch (RuntimeException exception) {
+                disableAfterFailure("destination commit", exception);
+                return true;
+            }
+            return accept("validated cached vertex replay", false, false, true);
+        } finally {
+            metrics.recordInterceptTiming(
+                    metrics.delta(interceptStart), materialNanos, meshNanos, poseNanos, queueNanos);
         }
-        return accept("validated cached vertex replay");
     }
 
     private MaterialPath resolveMaterialPath(VertexConsumer consumer) {
@@ -464,8 +550,9 @@ public final class ModelPartReplacementService {
         return renderGroupOwners.isEmpty() ? null : renderGroupOwners.getLast();
     }
 
-    private boolean accept(String path) {
+    private boolean accept(String path, boolean empty, boolean gpu, boolean cpuReplay) {
         replacementAccepts.incrementAndGet();
+        metrics.recordAccepted(empty, gpu, cpuReplay);
         if (!replacementLogged) {
             replacementLogged = true;
             ThreadiumClient.LOGGER.info("Threadium replaced a Minecraft 1.21.1 ModelPart draw through {}", path);
@@ -473,19 +560,25 @@ public final class ModelPartReplacementService {
         return true;
     }
 
-    private boolean fallback() {
+    private boolean fallback(FallbackReason reason, MaterialPath materialPath) {
         replacementFallbacks.incrementAndGet();
+        metrics.recordFallback(reason);
+        if (materialPath != null) materialPath.recordPipelineFallback(metrics);
+        else if (reason == FallbackReason.MATERIAL) {
+            metrics.recordPipelineFallback(RenderLayer1211Descriptor.Kind.UNSUPPORTED);
+        }
         return false;
     }
 
     private ModelPartGpuInstanceBackend gpuBackend() {
-        if (gpuBackend == null) gpuBackend = new ModelPartGpuInstanceBackend();
+        if (gpuBackend == null) gpuBackend = new ModelPartGpuInstanceBackend(metrics);
         return gpuBackend;
     }
 
     private void disableAfterFailure(String stage, RuntimeException exception) {
         runtimeEnabled = false;
         replacementFailures.incrementAndGet();
+        metrics.recordFailure();
         warnFailureOnce(stage, exception);
         if (gpuBackend != null && isRenderThread()) gpuBackend.reset();
     }
@@ -524,11 +617,58 @@ public final class ModelPartReplacementService {
         }
     }
 
+    private void reportMetricsIfDue() {
+        if (!metrics.enabled()) return;
+        long now = System.nanoTime();
+        if (now - lastMetricsReportNanos < metricsOutputIntervalNanos) return;
+        lastMetricsReportNanos = now;
+        ModelPart1211Metrics.Snapshot snapshot = metrics.snapshotAndReset();
+        ModelPartMaterialContextTracker.Diagnostics material = materialTracker.diagnostics();
+        ModelPartGpuInstanceBackend.Diagnostics gpu = gpuBackend == null
+                ? new ModelPartGpuInstanceBackend.Diagnostics(
+                        dev.alex.threadium.render.modelpart.ModelPartBackendState.UNINITIALIZED,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0)
+                : gpuBackend.diagnostics();
+        ThreadiumClient.LOGGER.info(
+                "Minecraft 1.21.1 interval metrics: worldGeneration={}, resourceGeneration={}, renderGroupDepth={}, cachedRoots={}, uniqueMeshes={}, retainedMeshBytes={}, uniquePoses={}, retainedPoseBytes={}, materialRequests={}, materialResolutions={}, materialUnresolved={}, materialCapacityRejections={}, materialTrackingFailures={}, gpuState={}, queuedInstances={}, uploadedMeshes={}, {}",
+                worldGeneration,
+                resourceGeneration,
+                renderGroupOwners.size(),
+                structureInspector.cachedRootCount(),
+                structureInspector.uniqueMeshCount(),
+                structureInspector.retainedMeshBytes(),
+                poseInspector.uniquePoseCount(),
+                poseInspector.retainedPoseBytes(),
+                material.materialProviderRequests(),
+                material.materialResolutionAttempts(),
+                material.materialUnresolvedResolutions(),
+                material.materialCapacityRejections(),
+                material.materialTrackingFailures(),
+                gpu.state(),
+                gpu.queuedInstances(),
+                gpu.uploadedMeshes(),
+                snapshot.describe());
+    }
+
     private void applyConfiguration() {
         ThreadiumConfig config = ThreadiumRuntimeConfig.current();
         appliedConfigurationRevision = ThreadiumRuntimeConfig.revision();
         runtimeEnabled = config.replacementEnabled();
         minimumGroupSubmits = config.gpuMinimumGroupSubmits();
+        metrics.configure(config.metricsEnabled());
+        metricsOutputIntervalNanos = Math.multiplyExact(config.metricsOutputIntervalSeconds(), 1_000_000_000L);
+        lastMetricsReportNanos = System.nanoTime();
         structureInspector.clear();
         poseInspector.clear();
         materialTracker.clearLifecycle();
@@ -577,6 +717,12 @@ public final class ModelPartReplacementService {
             if (crumbling != null) return crumbling.descriptor.layer();
             return outline == null ? null : outline.material.descriptor.layer();
         }
+
+        private void recordPipelineFallback(ModelPart1211Metrics metrics) {
+            if (base != null) metrics.recordPipelineFallback(base.descriptor.kind());
+            if (crumbling != null) metrics.recordPipelineFallback(crumbling.descriptor.kind());
+            if (outline != null) metrics.recordPipelineFallback(outline.material.descriptor.kind());
+        }
     }
 
     public record Diagnostics(
@@ -587,5 +733,13 @@ public final class ModelPartReplacementService {
             long replacementAccepts,
             long replacementFallbacks,
             long replacementFailures,
+            int renderGroupDepth,
+            int cachedRoots,
+            int uniqueMeshes,
+            long retainedMeshBytes,
+            int uniquePoses,
+            long retainedPoseBytes,
+            ModelPartMaterialContextTracker.Diagnostics material,
+            ModelPart1211Metrics.Snapshot metrics,
             ModelPartGpuInstanceBackend.Diagnostics gpu) {}
 }

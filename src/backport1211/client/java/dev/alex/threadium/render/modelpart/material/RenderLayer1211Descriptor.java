@@ -204,19 +204,19 @@ public record RenderLayer1211Descriptor(
             this.backendSupported = backendSupported;
         }
 
-        ShaderMode shaderMode() {
+        public ShaderMode shaderMode() {
             return shaderMode;
         }
 
-        SubmissionPolicy submissionPolicy() {
+        public SubmissionPolicy submissionPolicy() {
             return submissionPolicy;
         }
 
-        boolean alphaCutout() {
+        public boolean alphaCutout() {
             return alphaCutout;
         }
 
-        boolean backendSupported() {
+        public boolean backendSupported() {
             return backendSupported;
         }
     }
