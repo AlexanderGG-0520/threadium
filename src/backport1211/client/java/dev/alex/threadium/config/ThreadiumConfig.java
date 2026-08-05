@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Properties;
 import net.fabricmc.loader.api.FabricLoader;
 
@@ -33,7 +34,16 @@ public record ThreadiumConfig(
 
     public ThreadiumConfig {
         gpuBackend = normalizeBackend(gpuBackend);
-        validate(this);
+        validateValues(
+                gpuMinimumGroupSubmits,
+                gpuMaxInstances,
+                gpuMaxBonesPerModel,
+                gpuMaxBonesPerFrame,
+                gpuMaxVerticesPerMesh,
+                gpuMaxIndicesPerMesh,
+                gpuMaxCachedMeshes,
+                gpuMaxMeshBytes,
+                metricsOutputIntervalSeconds);
     }
 
     /** The backport remains opt-in until parity implementation and real-machine validation are complete. */
@@ -70,38 +80,18 @@ public record ThreadiumConfig(
                     bool(properties, "metrics.enabled", defaults.metricsEnabled),
                     bool(properties, "debug.logging", defaults.debugLogging),
                     bool(properties, "entity.gpu.enabled", defaults.gpuEntityEnabled),
-                    boundedInt(
-                            properties,
-                            "entity.gpu.minimumGroupSubmits",
-                            defaults.gpuMinimumGroupSubmits,
-                            1,
-                            65536),
+                    integer(properties, "entity.gpu.minimumGroupSubmits", defaults.gpuMinimumGroupSubmits, 1, 65536),
                     choice(properties, "entity.gpu.backend", defaults.gpuBackend, "auto", "opengl33", "disabled"),
-                    boundedInt(properties, "entity.gpu.maxInstances", defaults.gpuMaxInstances, 1, 65536),
-                    boundedInt(properties, "entity.gpu.maxBonesPerModel", defaults.gpuMaxBonesPerModel, 1, 1024),
-                    boundedInt(properties, "entity.gpu.maxBonesPerFrame", defaults.gpuMaxBonesPerFrame, 1, 1048576),
-                    boundedInt(
-                            properties,
-                            "entity.gpu.maxVerticesPerMesh",
-                            defaults.gpuMaxVerticesPerMesh,
-                            4,
-                            4194304),
-                    boundedInt(
-                            properties,
-                            "entity.gpu.maxIndicesPerMesh",
-                            defaults.gpuMaxIndicesPerMesh,
-                            6,
-                            6291456),
-                    boundedInt(properties, "entity.gpu.maxCachedMeshes", defaults.gpuMaxCachedMeshes, 1, 8192),
-                    boundedLong(
-                            properties,
-                            "entity.gpu.maxMeshBytes",
-                            defaults.gpuMaxMeshBytes,
-                            1048576L,
-                            1L << 34),
+                    integer(properties, "entity.gpu.maxInstances", defaults.gpuMaxInstances, 1, 65536),
+                    integer(properties, "entity.gpu.maxBonesPerModel", defaults.gpuMaxBonesPerModel, 1, 1024),
+                    integer(properties, "entity.gpu.maxBonesPerFrame", defaults.gpuMaxBonesPerFrame, 1, 1048576),
+                    integer(properties, "entity.gpu.maxVerticesPerMesh", defaults.gpuMaxVerticesPerMesh, 4, 4194304),
+                    integer(properties, "entity.gpu.maxIndicesPerMesh", defaults.gpuMaxIndicesPerMesh, 6, 6291456),
+                    integer(properties, "entity.gpu.maxCachedMeshes", defaults.gpuMaxCachedMeshes, 1, 8192),
+                    longValue(properties, "entity.gpu.maxMeshBytes", defaults.gpuMaxMeshBytes, 1048576L, 1L << 34),
                     bool(properties, "entity.gpu.allowVanillaFallback", defaults.gpuAllowVanillaFallback),
                     bool(properties, "entity.gpu.batchConsolidation", defaults.gpuBatchConsolidation),
-                    boundedInt(
+                    integer(
                             properties,
                             "metrics.output.interval.seconds",
                             defaults.metricsOutputIntervalSeconds,
@@ -118,6 +108,8 @@ public record ThreadiumConfig(
     }
 
     static boolean save(Path path, ThreadiumConfig config) {
+        Objects.requireNonNull(path, "path");
+        Objects.requireNonNull(config, "config");
         validate(config);
         Properties properties = read(path);
         set(properties, "enabled", config.enabled);
@@ -137,17 +129,14 @@ public record ThreadiumConfig(
         set(properties, "entity.gpu.batchConsolidation", config.gpuBatchConsolidation);
         set(properties, "metrics.output.interval.seconds", config.metricsOutputIntervalSeconds);
         try {
-            Files.createDirectories(path.getParent());
+            Path parent = path.toAbsolutePath().getParent();
+            if (parent != null) Files.createDirectories(parent);
             Path temporary = path.resolveSibling(path.getFileName() + ".tmp");
             try (OutputStream output = Files.newOutputStream(temporary)) {
                 properties.store(output, "Threadium runtime configuration");
             }
             try {
-                Files.move(
-                        temporary,
-                        path,
-                        StandardCopyOption.REPLACE_EXISTING,
-                        StandardCopyOption.ATOMIC_MOVE);
+                Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } catch (IOException atomicMoveUnsupported) {
                 Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
             }
@@ -190,7 +179,7 @@ public record ThreadiumConfig(
         throw new IllegalArgumentException(key + " must be true or false");
     }
 
-    private static int boundedInt(Properties properties, String key, int fallback, int minimum, int maximum) {
+    private static int integer(Properties properties, String key, int fallback, int minimum, int maximum) {
         String value = properties.getProperty(key);
         if (value == null) return fallback;
         int parsed = Integer.parseInt(value.trim());
@@ -198,7 +187,7 @@ public record ThreadiumConfig(
         return parsed;
     }
 
-    private static long boundedLong(Properties properties, String key, long fallback, long minimum, long maximum) {
+    private static long longValue(Properties properties, String key, long fallback, long minimum, long maximum) {
         String value = properties.getProperty(key);
         if (value == null) return fallback;
         long parsed = Long.parseLong(value.trim());
@@ -209,8 +198,8 @@ public record ThreadiumConfig(
     private static String choice(Properties properties, String key, String fallback, String... allowed) {
         String value = properties.getProperty(key);
         if (value == null) return fallback;
-        value = value.trim().toLowerCase(Locale.ROOT);
-        for (String candidate : allowed) if (candidate.equals(value)) return value;
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        for (String candidate : allowed) if (candidate.equals(normalized)) return normalized;
         throw new IllegalArgumentException(key + " has an unsupported value");
     }
 
@@ -224,15 +213,37 @@ public record ThreadiumConfig(
     }
 
     private static void validate(ThreadiumConfig config) {
-        if (config.gpuMinimumGroupSubmits < 1 || config.gpuMinimumGroupSubmits > 65536
-                || config.gpuMaxInstances < 1 || config.gpuMaxInstances > 65536
-                || config.gpuMaxBonesPerModel < 1 || config.gpuMaxBonesPerModel > 1024
-                || config.gpuMaxBonesPerFrame < 1 || config.gpuMaxBonesPerFrame > 1048576
-                || config.gpuMaxVerticesPerMesh < 4 || config.gpuMaxVerticesPerMesh > 4194304
-                || config.gpuMaxIndicesPerMesh < 6 || config.gpuMaxIndicesPerMesh > 6291456
-                || config.gpuMaxCachedMeshes < 1 || config.gpuMaxCachedMeshes > 8192
-                || config.gpuMaxMeshBytes < 1048576L || config.gpuMaxMeshBytes > (1L << 34)
-                || config.metricsOutputIntervalSeconds < 5 || config.metricsOutputIntervalSeconds > 3600) {
+        validateValues(
+                config.gpuMinimumGroupSubmits,
+                config.gpuMaxInstances,
+                config.gpuMaxBonesPerModel,
+                config.gpuMaxBonesPerFrame,
+                config.gpuMaxVerticesPerMesh,
+                config.gpuMaxIndicesPerMesh,
+                config.gpuMaxCachedMeshes,
+                config.gpuMaxMeshBytes,
+                config.metricsOutputIntervalSeconds);
+    }
+
+    private static void validateValues(
+            int minimumGroupSubmits,
+            int maxInstances,
+            int maxBonesPerModel,
+            int maxBonesPerFrame,
+            int maxVerticesPerMesh,
+            int maxIndicesPerMesh,
+            int maxCachedMeshes,
+            long maxMeshBytes,
+            int metricsIntervalSeconds) {
+        if (minimumGroupSubmits < 1 || minimumGroupSubmits > 65536
+                || maxInstances < 1 || maxInstances > 65536
+                || maxBonesPerModel < 1 || maxBonesPerModel > 1024
+                || maxBonesPerFrame < 1 || maxBonesPerFrame > 1048576
+                || maxVerticesPerMesh < 4 || maxVerticesPerMesh > 4194304
+                || maxIndicesPerMesh < 6 || maxIndicesPerMesh > 6291456
+                || maxCachedMeshes < 1 || maxCachedMeshes > 8192
+                || maxMeshBytes < 1048576L || maxMeshBytes > (1L << 34)
+                || metricsIntervalSeconds < 5 || metricsIntervalSeconds > 3600) {
             throw new IllegalArgumentException("Threadium configuration values are outside their supported ranges");
         }
     }
