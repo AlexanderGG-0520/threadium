@@ -1,0 +1,30 @@
+name: Export Minecraft 26.2 outline reference
+
+on:
+  pull_request:
+    branches:
+      - mc26.2/fabric/dev
+
+permissions:
+  contents: read
+
+jobs:
+  export-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out reference branch
+        uses: actions/checkout@v4
+
+      - name: Package repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive --format=zip --output=/tmp/threadium-mc262-outline-reference.zip HEAD
+
+      - name: Upload reference
+        uses: actions/upload-artifact@v4
+        with:
+          name: threadium-mc262-outline-reference
+          path: /tmp/threadium-mc262-outline-reference.zip
+          retention-days: 1
