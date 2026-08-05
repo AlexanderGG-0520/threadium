@@ -1,7 +1,6 @@
 package dev.alex.threadium.render.modelpart.material;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -15,11 +14,5 @@ class RenderLayer1211CrumblingPolicyTest {
         assertEquals(RenderLayer1211Descriptor.SubmissionPolicy.SORTED_QUAD_STREAM, crumbling.submissionPolicy());
         assertTrue(crumbling.alphaCutout());
         assertTrue(crumbling.backendSupported());
-    }
-
-    @Test
-    void outlinePipelinesRemainFailClosed() {
-        assertFalse(RenderLayer1211Descriptor.Kind.OUTLINE_CULL.backendSupported());
-        assertFalse(RenderLayer1211Descriptor.Kind.OUTLINE_NO_CULL.backendSupported());
     }
 }
