@@ -41,13 +41,16 @@ void main() {
         outColor = vec4(uColorModulator.rgb * vVertexColor.rgb, uColorModulator.a);
         return;
     }
-    if (uAlphaCutout != 0 && uShaderMode != 1 && color.a < 0.1) discard;
 
     if (uShaderMode == 7) {
+        color *= uColorModulator;
+        if (color.a < 0.1) discard;
         float fade = fogFade() * uGlintAlpha;
-        outColor = vec4((color * uColorModulator).rgb * fade, color.a * uColorModulator.a);
+        outColor = vec4(color.rgb * fade, color.a);
         return;
     }
+
+    if (uAlphaCutout != 0 && uShaderMode != 1 && color.a < 0.1) discard;
 
     if (uShaderMode == 10) {
         ivec2 overlay = ivec2(vOverlay & 65535, (vOverlay >> 16) & 65535);
