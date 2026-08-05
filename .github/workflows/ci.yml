@@ -34,6 +34,26 @@ jobs:
       - name: Validate Java 21 backport
         run: gradle --no-daemon clean spotlessApply spotlessCheck test build
 
+      - name: Collect 26.2 reference sources
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/reference-26.2
+          git fetch --no-tags --depth=1 origin mc26.2/fabric/dev
+          git archive origin/mc26.2/fabric/dev \
+            src/client/java/dev/alex/threadium/render/modelpart \
+            src/client/java/dev/alex/threadium/config \
+            src/client/java/dev/alex/threadium/metrics \
+            src/client/java/dev/alex/threadium/benchmark \
+            src/client/java/dev/alex/threadium/compat \
+            src/client/java/dev/alex/threadium/mixin \
+            src/client/resources \
+            src/test/java/dev/alex/threadium/render/modelpart \
+            src/test/java/dev/alex/threadium/config \
+            src/test/java/dev/alex/threadium/benchmark \
+            | tar -x -C build/reference-26.2
+
       - name: Upload validation workspace
         if: always()
         uses: actions/upload-artifact@v4
@@ -49,6 +69,7 @@ jobs:
             gradle
             gradlew
             gradlew.bat
+            build/reference-26.2
             build/reports
             build/test-results
             build/libs
