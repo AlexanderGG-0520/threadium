@@ -3,7 +3,6 @@ package dev.alex.threadium.mixin;
 import dev.alex.threadium.render.entity.ModelPartReplacementService;
 import dev.alex.threadium.render.entity.PassThroughEntityRenderService;
 import dev.alex.threadium.render.modelpart.material.MaterialProviderSource;
-import net.minecraft.client.render.BufferBuilder;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexConsumerProvider;
@@ -30,12 +29,10 @@ abstract class VertexConsumerProviderImmediateMixin {
     }
 
     @Inject(
-            method =
-                    "draw(Lnet/minecraft/client/render/RenderLayer;Lnet/minecraft/client/render/BufferBuilder;)V",
+            method = "draw(Lnet/minecraft/client/render/RenderLayer;)V",
             at = @At("HEAD"),
             require = 1)
-    private void threadium$flushOwnedGpuReplay(
-            RenderLayer layer, BufferBuilder vanillaBuilder, CallbackInfo callbackInfo) {
+    private void threadium$flushOwnedGpuReplay(RenderLayer layer, CallbackInfo callbackInfo) {
         ModelPartReplacementService.flushProviderLayer(this, layer);
     }
 }
