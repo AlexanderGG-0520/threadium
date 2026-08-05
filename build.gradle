@@ -36,8 +36,6 @@ loom {
     }
 }
 
-// Keep the completed 26.2 implementation intact while the 1.21.1 port is rebuilt
-// behind a minimal, compiling pass-through source set.
 sourceSets {
     main {
         java.setSrcDirs(['src/backport1211/main/java'])
@@ -58,6 +56,7 @@ dependencies {
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
     modImplementation "net.fabricmc:fabric-loader:${project.fabric_loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    modCompileOnly 'com.terraformersmc:modmenu:11.0.4'
     testImplementation platform('org.junit:junit-bom:5.13.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

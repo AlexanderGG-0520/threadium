@@ -2,6 +2,8 @@ package dev.alex.threadium.render.entity;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.alex.threadium.ThreadiumClient;
+import dev.alex.threadium.config.ThreadiumConfig;
+import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.render.modelpart.ModelPartGpuInstanceBackend;
 import dev.alex.threadium.render.modelpart.material.MaterialContextResolution;
 import dev.alex.threadium.render.modelpart.material.MaterialProviderSource;
@@ -23,15 +25,8 @@ import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.util.math.MatrixStack;
 
-/**
- * Fail-closed Minecraft 1.21.1 replacement service.
- *
- * <p>The GPU path queues immutable mesh, bone-pose, root-transform, light, overlay, and tint data directly. It does not
- * construct the CPU-expanded replay stream. The existing exact replay path remains available as a fail-closed fallback
- * while the legacy OpenGL instancing backend is brought to feature parity.
- */
+/** Render-thread-owned fail-closed Minecraft 1.21.1 ModelPart replacement service. */
 public final class ModelPartReplacementService {
-    private static final boolean CONFIGURED = Boolean.getBoolean("threadium.backport1211.replacement");
     private static volatile ModelPartReplacementService instance;
 
     private final ModelPartStructureInspector structureInspector = new ModelPartStructureInspector();
@@ -41,6 +36,7 @@ public final class ModelPartReplacementService {
     private final AtomicLong pendingWorldInvalidations = new AtomicLong();
     private final AtomicLong pendingResourceInvalidations = new AtomicLong();
     private final AtomicBoolean pendingShutdown = new AtomicBoolean();
+    private final AtomicBoolean pendingConfigurationReload = new AtomicBoolean();
     private final AtomicLong replacementAttempts = new AtomicLong();
     private final AtomicLong replacementAccepts = new AtomicLong();
     private final AtomicLong replacementFallbacks = new AtomicLong();
@@ -49,28 +45,37 @@ public final class ModelPartReplacementService {
     private long worldGeneration;
     private long resourceGeneration;
     private int renderDepth;
-    private boolean runtimeEnabled = CONFIGURED;
+    private long appliedConfigurationRevision = -1;
+    private boolean runtimeEnabled;
     private boolean replacementLogged;
     private boolean failureLogged;
 
     private ModelPartReplacementService() {}
 
     public static synchronized void initialize() {
-        if (instance == null) instance = new ModelPartReplacementService();
+        if (instance == null) {
+            instance = new ModelPartReplacementService();
+            instance.applyConfiguration();
+        }
     }
 
     public static boolean configured() {
-        return CONFIGURED;
+        return ThreadiumRuntimeConfig.current().replacementEnabled();
     }
 
     public static boolean gpuConfigured() {
-        return CONFIGURED && ModelPartGpuInstanceBackend.configured();
+        return ThreadiumRuntimeConfig.current().gpuReplacementEnabled()
+                && ModelPartGpuInstanceBackend.configured();
     }
 
     public static void beginFrame() {
         ModelPartReplacementService current = instance;
         if (current == null) return;
         current.requireRenderThread();
+        if (current.pendingConfigurationReload.getAndSet(false)
+                || current.appliedConfigurationRevision != ThreadiumRuntimeConfig.revision()) {
+            current.applyConfiguration();
+        }
         if (current.pendingShutdown.getAndSet(false)) {
             current.shutdownOnRenderThread();
             return;
@@ -96,8 +101,7 @@ public final class ModelPartReplacementService {
     public static void observeMaterialProviderRequest(
             MaterialProviderSource source, Object provider, RenderLayer layer, VertexConsumer consumer) {
         ModelPartReplacementService current = instance;
-        if (current == null || !current.runtimeEnabled) return;
-        if (!current.isRenderThread()) return;
+        if (current == null || !current.runtimeEnabled || !current.isRenderThread()) return;
         try {
             current.materialTracker.register(provider, layer, consumer, source);
         } catch (RuntimeException exception) {
@@ -127,6 +131,11 @@ public final class ModelPartReplacementService {
         } catch (RuntimeException exception) {
             current.disableAfterFailure("GPU upload or draw", exception);
         }
+    }
+
+    public static void requestConfigurationReload() {
+        ModelPartReplacementService current = instance;
+        if (current != null) current.pendingConfigurationReload.set(true);
     }
 
     public static void invalidateWorld() {
@@ -162,9 +171,9 @@ public final class ModelPartReplacementService {
                         0)
                 : current.gpuBackend.diagnostics();
         return current == null
-                ? new Diagnostics(CONFIGURED, gpuConfigured(), false, 0, 0, 0, 0, gpu)
+                ? new Diagnostics(configured(), gpuConfigured(), false, 0, 0, 0, 0, gpu)
                 : new Diagnostics(
-                        CONFIGURED,
+                        configured(),
                         gpuConfigured(),
                         current.runtimeEnabled,
                         current.replacementAttempts.get(),
@@ -293,6 +302,29 @@ public final class ModelPartReplacementService {
             gpuBackend = null;
         } else {
             gpuBackend.reset();
+        }
+    }
+
+    private void applyConfiguration() {
+        ThreadiumConfig config = ThreadiumRuntimeConfig.current();
+        appliedConfigurationRevision = ThreadiumRuntimeConfig.revision();
+        runtimeEnabled = config.replacementEnabled();
+        structureInspector.clear();
+        poseInspector.clear();
+        materialTracker.clearLifecycle();
+        renderDepth = 0;
+        if (gpuBackend != null) {
+            if (isRenderThread()) gpuBackend.close();
+            gpuBackend = null;
+        }
+        if (config.debugLogging()) {
+            ThreadiumClient.LOGGER.info(
+                    "Applied Threadium 1.21.1 config revision {}: replacement={}, gpu={}, backend={}, consolidation={}",
+                    appliedConfigurationRevision,
+                    runtimeEnabled,
+                    config.gpuReplacementEnabled(),
+                    config.gpuBackend(),
+                    config.gpuBatchConsolidation());
         }
     }
 

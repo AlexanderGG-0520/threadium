@@ -1,5 +1,6 @@
 package dev.alex.threadium;
 
+import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.render.entity.ModelPartReplacementService;
 import dev.alex.threadium.render.entity.PassThroughEntityRenderService;
 import net.fabricmc.api.ClientModInitializer;
@@ -13,13 +14,14 @@ import net.minecraft.util.Identifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Minecraft 1.21.1 bootstrap with an opt-in, fail-closed cached ModelPart replacement path. */
+/** Minecraft 1.21.1 bootstrap with fail-closed cached and instanced ModelPart replacement paths. */
 public final class ThreadiumClient implements ClientModInitializer {
     public static final String MOD_ID = "threadium";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
     @Override
     public void onInitializeClient() {
+        ThreadiumRuntimeConfig.initialize();
         PassThroughEntityRenderService.initialize();
         ModelPartReplacementService.initialize();
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> invalidateWorld());
@@ -31,8 +33,9 @@ public final class ThreadiumClient implements ClientModInitializer {
         ResourceManagerHelper.get(ResourceType.CLIENT_RESOURCES)
                 .registerReloadListener(new BackportResourceReloadListener());
         LOGGER.info(
-                "Threadium 1.21.1 backport initialized; experimental cached replacement is {}",
-                ModelPartReplacementService.configured() ? "enabled" : "disabled");
+                "Threadium 1.21.1 backport initialized; cached replacement is {} and GPU instancing is {}",
+                ModelPartReplacementService.configured() ? "enabled" : "disabled",
+                ModelPartReplacementService.gpuConfigured() ? "enabled" : "disabled");
     }
 
     private static void invalidateWorld() {

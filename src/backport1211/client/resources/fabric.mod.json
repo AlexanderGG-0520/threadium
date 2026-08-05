@@ -3,7 +3,7 @@
   "id": "threadium",
   "version": "${version}",
   "name": "Threadium",
-  "description": "Minecraft 1.21.1 backport bootstrap for safe ModelPart rendering optimization.",
+  "description": "Minecraft 1.21.1 backport of Threadium's safe ModelPart GPU instancing optimization.",
   "authors": [
     "AlexanderGG"
   ],
@@ -18,6 +18,9 @@
   "entrypoints": {
     "client": [
       "dev.alex.threadium.ThreadiumClient"
+    ],
+    "modmenu": [
+      "dev.alex.threadium.config.ThreadiumModMenuApi"
     ]
   },
   "mixins": [
