@@ -34,6 +34,19 @@ jobs:
       - name: Validate Java 21 backport
         run: gradle --no-daemon clean spotlessApply spotlessCheck test build
 
+      - name: Collect Minecraft 1.21.1 shader references
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/minecraft-shader-reference
+          while IFS= read -r archive; do
+            if unzip -Z1 "$archive" 2>/dev/null | grep -q '^assets/minecraft/shaders/core/rendertype_entity'; then
+              unzip -q -o "$archive" 'assets/minecraft/shaders/*' -d build/minecraft-shader-reference
+            fi
+          done < <(find "$HOME/.gradle/caches/fabric-loom" "$GITHUB_WORKSPACE/.gradle" \
+            -type f -name '*.jar' 2>/dev/null | sort -u)
+
       - name: Upload validation reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -42,6 +55,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
           path: |
+            build/minecraft-shader-reference
             build/reports
             build/test-results
             build/libs
