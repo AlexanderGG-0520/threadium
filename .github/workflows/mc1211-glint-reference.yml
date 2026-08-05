@@ -28,53 +28,61 @@ jobs:
         with:
           gradle-version: "9.6.1"
 
-      - name: Generate mapped Minecraft sources
-        run: gradle --no-daemon genSources
-
       - name: Extract exact glint references
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           rm -rf tmp/glint-reference
           mkdir -p tmp/glint-reference/shaders
 
-          source_jar=""
+          set +e
+          gradle --no-daemon genSources > tmp/glint-reference/genSources.log 2>&1
+          printf '%s\n' "$?" > tmp/glint-reference/genSources.exit
+          gradle --no-daemon classes > tmp/glint-reference/classes.log 2>&1
+          printf '%s\n' "$?" > tmp/glint-reference/classes.exit
+          set -e
+
+          find "$HOME/.gradle" .gradle -type f -name '*.jar' -print 2>/dev/null \
+            | sort > tmp/glint-reference/jars.txt
+
+          : > tmp/glint-reference/source-candidates.txt
+          : > tmp/glint-reference/client-candidates.txt
           while IFS= read -r candidate; do
-            if unzip -l "$candidate" 2>/dev/null | grep -q 'net/minecraft/client/render/RenderLayer.java'; then
-              source_jar="$candidate"
-              break
+            entries="$(unzip -Z1 "$candidate" 2>/dev/null || true)"
+            if grep -q 'net/minecraft/client/render/RenderLayer.java' <<< "$entries"; then
+              printf '%s\n' "$candidate" >> tmp/glint-reference/source-candidates.txt
             fi
-          done < <(find "$HOME/.gradle/caches" -type f -name '*sources*.jar' -print)
-          test -n "$source_jar"
-
-          for source in \
-            net/minecraft/client/render/RenderLayer.java \
-            net/minecraft/client/render/RenderPhase.java \
-            net/minecraft/client/render/GameRenderer.java \
-            net/minecraft/client/render/item/ItemRenderer.java \
-            com/mojang/blaze3d/systems/RenderSystem.java; do
-            if unzip -l "$source_jar" "$source" 2>/dev/null | grep -q "$source"; then
-              unzip -p "$source_jar" "$source" > "tmp/glint-reference/$(basename "$source")"
+            if grep -q 'assets/minecraft/shaders/core/rendertype_glint' <<< "$entries"; then
+              printf '%s\n' "$candidate" >> tmp/glint-reference/client-candidates.txt
             fi
-          done
+          done < tmp/glint-reference/jars.txt
 
-          client_jar=""
-          while IFS= read -r candidate; do
-            if unzip -l "$candidate" 2>/dev/null | grep -q 'assets/minecraft/shaders/core/rendertype_glint'; then
-              client_jar="$candidate"
-              break
-            fi
-          done < <(find "$HOME/.gradle/caches" -type f -name '*.jar' -print)
-          test -n "$client_jar"
+          source_jar="$(head -n 1 tmp/glint-reference/source-candidates.txt || true)"
+          if [[ -n "$source_jar" ]]; then
+            for source in \
+              net/minecraft/client/render/RenderLayer.java \
+              net/minecraft/client/render/RenderPhase.java \
+              net/minecraft/client/render/GameRenderer.java \
+              net/minecraft/client/render/item/ItemRenderer.java \
+              com/mojang/blaze3d/systems/RenderSystem.java; do
+              if unzip -Z1 "$source_jar" 2>/dev/null | grep -qx "$source"; then
+                unzip -p "$source_jar" "$source" > "tmp/glint-reference/$(basename "$source")"
+              fi
+            done
+          fi
 
-          unzip -Z1 "$client_jar" \
-            | grep -E '^assets/minecraft/shaders/(core|include)/.*(glint|fog).*\.(json|vsh|fsh|glsl)$' \
-            | sort > tmp/glint-reference/shader-paths.txt
-          while IFS= read -r shader; do
-            target="tmp/glint-reference/shaders/${shader#assets/minecraft/shaders/}"
-            mkdir -p "$(dirname "$target")"
-            unzip -p "$client_jar" "$shader" > "$target"
-          done < tmp/glint-reference/shader-paths.txt
+          client_jar="$(head -n 1 tmp/glint-reference/client-candidates.txt || true)"
+          if [[ -n "$client_jar" ]]; then
+            unzip -Z1 "$client_jar" \
+              | grep -E '^assets/minecraft/shaders/(core|include)/.*(glint|fog).*\.(json|vsh|fsh|glsl)$' \
+              | sort > tmp/glint-reference/shader-paths.txt || true
+            while IFS= read -r shader; do
+              [[ -n "$shader" ]] || continue
+              target="tmp/glint-reference/shaders/${shader#assets/minecraft/shaders/}"
+              mkdir -p "$(dirname "$target")"
+              unzip -p "$client_jar" "$shader" > "$target"
+            done < tmp/glint-reference/shader-paths.txt
+          fi
 
           printf 'source_jar=%s\nclient_jar=%s\n' "$source_jar" "$client_jar" > tmp/glint-reference/origin.txt
 
