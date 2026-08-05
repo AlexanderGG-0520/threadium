@@ -1,9 +1,9 @@
 name: Export Minecraft 1.21.1 adaptive workspace
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/mc1211-adaptive-export
+      - mc1.21.1/fabric/dev
 
 permissions:
   contents: read
