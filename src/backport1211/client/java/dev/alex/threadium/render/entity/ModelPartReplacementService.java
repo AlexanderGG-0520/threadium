@@ -2,6 +2,7 @@ package dev.alex.threadium.render.entity;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.alex.threadium.ThreadiumClient;
+import dev.alex.threadium.render.modelpart.gpu.ModelPartGpuReplayBackend;
 import dev.alex.threadium.render.modelpart.material.MaterialContextResolution;
 import dev.alex.threadium.render.modelpart.material.MaterialProviderSource;
 import dev.alex.threadium.render.modelpart.material.ModelPartMaterialContextTracker;
@@ -26,8 +27,9 @@ import net.minecraft.client.util.math.MatrixStack;
  * First fail-closed Minecraft 1.21.1 replacement path.
  *
  * <p>It replaces only exact {@code entity_cutout_no_cull} draws that resolve directly from a trusted provider to the
- * exact Vanilla BufferBuilder. Geometry is completely transformed and validated before the destination consumer is
- * mutated. The experimental path remains opt-in until real-machine visual validation is complete.
+ * exact Vanilla BufferBuilder. Geometry is completely transformed and validated before either the destination
+ * consumer is mutated or a Threadium-owned GPU batch is committed. Both replacement modes remain opt-in until
+ * real-machine visual validation is complete.
  */
 public final class ModelPartReplacementService {
     private static final boolean CONFIGURED = Boolean.getBoolean("threadium.backport1211.replacement");
@@ -44,6 +46,7 @@ public final class ModelPartReplacementService {
     private final AtomicLong replacementAccepts = new AtomicLong();
     private final AtomicLong replacementFallbacks = new AtomicLong();
     private final AtomicLong replacementFailures = new AtomicLong();
+    private ModelPartGpuReplayBackend gpuBackend;
     private long worldGeneration;
     private long resourceGeneration;
     private int renderDepth;
@@ -61,16 +64,16 @@ public final class ModelPartReplacementService {
         return CONFIGURED;
     }
 
+    public static boolean gpuConfigured() {
+        return CONFIGURED && ModelPartGpuReplayBackend.configured();
+    }
+
     public static void beginFrame() {
         ModelPartReplacementService current = instance;
         if (current == null) return;
         current.requireRenderThread();
         if (current.pendingShutdown.getAndSet(false)) {
-            current.destroyState();
-            current.runtimeEnabled = false;
-            synchronized (ModelPartReplacementService.class) {
-                if (instance == current) instance = null;
-            }
+            current.shutdownOnRenderThread();
             return;
         }
         long worlds = current.pendingWorldInvalidations.getAndSet(0);
@@ -78,7 +81,13 @@ public final class ModelPartReplacementService {
         if (worlds != 0 || resources != 0) {
             current.worldGeneration = Math.addExact(current.worldGeneration, worlds);
             current.resourceGeneration = Math.addExact(current.resourceGeneration, resources);
-            current.destroyState();
+            current.destroyState(false);
+        } else if (current.gpuBackend != null) {
+            try {
+                current.gpuBackend.verifyFrameDrained();
+            } catch (RuntimeException exception) {
+                current.disableAfterFailure("GPU flush boundary validation", exception);
+            }
         }
         current.renderDepth = 0;
         current.poseInspector.beginFrame();
@@ -111,6 +120,16 @@ public final class ModelPartReplacementService {
         current.renderDepth--;
     }
 
+    public static void flushProviderLayer(Object provider, RenderLayer layer) {
+        ModelPartReplacementService current = instance;
+        if (current == null || !current.runtimeEnabled || current.gpuBackend == null) return;
+        try {
+            current.gpuBackend.flush(provider, layer);
+        } catch (RuntimeException exception) {
+            current.disableAfterFailure("GPU upload or draw", exception);
+        }
+    }
+
     public static void invalidateWorld() {
         ModelPartReplacementService current = instance;
         if (current != null) current.pendingWorldInvalidations.incrementAndGet();
@@ -123,20 +142,27 @@ public final class ModelPartReplacementService {
 
     public static void shutdown() {
         ModelPartReplacementService current = instance;
-        if (current != null) current.pendingShutdown.set(true);
+        if (current == null) return;
+        if (current.isRenderThread()) current.shutdownOnRenderThread();
+        else current.pendingShutdown.set(true);
     }
 
     public static Diagnostics diagnostics() {
         ModelPartReplacementService current = instance;
+        ModelPartGpuReplayBackend.Diagnostics gpu = current == null || current.gpuBackend == null
+                ? new ModelPartGpuReplayBackend.Diagnostics(0, 0, 0, 0, 0)
+                : current.gpuBackend.diagnostics();
         return current == null
-                ? new Diagnostics(CONFIGURED, false, 0, 0, 0, 0)
+                ? new Diagnostics(CONFIGURED, gpuConfigured(), false, 0, 0, 0, 0, gpu)
                 : new Diagnostics(
                         CONFIGURED,
+                        gpuConfigured(),
                         current.runtimeEnabled,
                         current.replacementAttempts.get(),
                         current.replacementAccepts.get(),
                         current.replacementFallbacks.get(),
-                        current.replacementFailures.get());
+                        current.replacementFailures.get(),
+                        gpu);
     }
 
     private boolean tryReplace(
@@ -145,20 +171,19 @@ public final class ModelPartReplacementService {
         if (!isRenderThread()) return fallback();
 
         MaterialContextResolution<Object, RenderLayer> material;
-        ImmutableModelPartMesh mesh;
-        ModelPartInvocationSnapshot invocation;
+        RenderLayer1211Descriptor descriptor;
         PreparedModelPartReplay replay;
         try {
             material = materialTracker.observeResolution(consumer);
-            RenderLayer1211Descriptor descriptor = RenderLayer1211Descriptor.inspect(material);
+            descriptor = RenderLayer1211Descriptor.inspect(material);
             if (!descriptor.replacementSafe() || !ModelPartVertexReplayCommitter.supports(consumer)) {
                 return fallback();
             }
-            mesh = structureInspector.cached(root);
+            ImmutableModelPartMesh mesh = structureInspector.cached(root);
             if (mesh == null) mesh = structureInspector.captureAndCache(root);
             ImmutableRootRenderTransform rootTransform = poseInspector.captureRoot(matrices.peek());
             ImmutableModelPartBonePose pose = poseInspector.capturePose(root, mesh).pose();
-            invocation = new ModelPartInvocationSnapshot(
+            ModelPartInvocationSnapshot invocation = new ModelPartInvocationSnapshot(
                     mesh, pose, rootTransform, light, overlay, color, worldGeneration, resourceGeneration);
             replay = PreparedModelPartReplay.prepare(invocation);
         } catch (RuntimeException exception) {
@@ -167,18 +192,31 @@ public final class ModelPartReplacementService {
             return fallback();
         }
 
+        if (replay.vertexCount() == 0) return accept("empty validated replay");
+        if (gpuConfigured()) {
+            try {
+                if (!gpuBackend().queue(material.provider(), descriptor.layer(), replay)) return fallback();
+                return accept("Threadium-owned GPU queue");
+            } catch (RuntimeException exception) {
+                disableAfterFailure("GPU queue commitment", exception);
+                return false;
+            }
+        }
+
         try {
             ModelPartVertexReplayCommitter.commit(replay, consumer);
         } catch (RuntimeException exception) {
-            replacementFailures.incrementAndGet();
             disableAfterFailure("destination commit", exception);
             return true;
         }
+        return accept("validated cached vertex replay");
+    }
+
+    private boolean accept(String path) {
         replacementAccepts.incrementAndGet();
         if (!replacementLogged) {
             replacementLogged = true;
-            ThreadiumClient.LOGGER.info(
-                    "Threadium replaced a Minecraft 1.21.1 ModelPart draw with a validated cached vertex replay");
+            ThreadiumClient.LOGGER.info("Threadium replaced a Minecraft 1.21.1 ModelPart draw through {}", path);
         }
         return true;
     }
@@ -188,10 +226,16 @@ public final class ModelPartReplacementService {
         return false;
     }
 
+    private ModelPartGpuReplayBackend gpuBackend() {
+        if (gpuBackend == null) gpuBackend = new ModelPartGpuReplayBackend();
+        return gpuBackend;
+    }
+
     private void disableAfterFailure(String stage, RuntimeException exception) {
         runtimeEnabled = false;
         replacementFailures.incrementAndGet();
         warnFailureOnce(stage, exception);
+        if (gpuBackend != null && isRenderThread()) gpuBackend.reset();
     }
 
     private void warnFailureOnce(String stage, RuntimeException exception) {
@@ -203,11 +247,27 @@ public final class ModelPartReplacementService {
                 exception);
     }
 
-    private void destroyState() {
+    private void shutdownOnRenderThread() {
+        requireRenderThread();
+        destroyState(true);
+        runtimeEnabled = false;
+        synchronized (ModelPartReplacementService.class) {
+            if (instance == this) instance = null;
+        }
+    }
+
+    private void destroyState(boolean closeGpu) {
         structureInspector.clear();
         poseInspector.clear();
         materialTracker.clearLifecycle();
         renderDepth = 0;
+        if (gpuBackend == null) return;
+        if (closeGpu) {
+            gpuBackend.close();
+            gpuBackend = null;
+        } else {
+            gpuBackend.reset();
+        }
     }
 
     private boolean isRenderThread() {
@@ -221,9 +281,11 @@ public final class ModelPartReplacementService {
 
     public record Diagnostics(
             boolean configured,
+            boolean gpuConfigured,
             boolean runtimeEnabled,
             long replacementAttempts,
             long replacementAccepts,
             long replacementFallbacks,
-            long replacementFailures) {}
+            long replacementFailures,
+            ModelPartGpuReplayBackend.Diagnostics gpu) {}
 }
