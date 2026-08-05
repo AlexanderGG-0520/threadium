@@ -89,7 +89,7 @@ spotless {
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
+        languageVersion = JavaLanguageVersion.of(21)
     }
     withSourcesJar()
 }
@@ -103,6 +103,10 @@ tasks.withType(Jar).configureEach {
 tasks.withType(JavaCompile).configureEach {
     options.release = 17
     options.encoding = 'UTF-8'
+}
+
+tasks.named('compileTestJava') {
+    options.release = 21
 }
 
 tasks.withType(ProcessResources).configureEach {
