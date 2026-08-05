@@ -32,4 +32,4 @@ jobs:
           gradle-version: "9.6.1"
 
       - name: Validate Java 21 backport
-        run: gradle --no-daemon clean spotlessCheck test build
+        run: gradle --no-daemon clean spotlessApply spotlessCheck test build
