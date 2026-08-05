@@ -1,5 +1,6 @@
 package dev.alex.threadium.mixin;
 
+import dev.alex.threadium.render.entity.ModelPartReplacementService;
 import dev.alex.threadium.render.entity.PassThroughEntityRenderService;
 import dev.alex.threadium.render.modelpart.material.MaterialProviderSource;
 import net.minecraft.client.render.RenderLayer;
@@ -19,7 +20,10 @@ abstract class VertexConsumerProviderImmediateMixin {
             require = 1)
     private void threadium$observeReturnedConsumer(
             RenderLayer layer, CallbackInfoReturnable<VertexConsumer> callbackInfo) {
+        VertexConsumer consumer = callbackInfo.getReturnValue();
         PassThroughEntityRenderService.observeMaterialProviderRequest(
-                MaterialProviderSource.IMMEDIATE, this, layer, callbackInfo.getReturnValue());
+                MaterialProviderSource.IMMEDIATE, this, layer, consumer);
+        ModelPartReplacementService.observeMaterialProviderRequest(
+                MaterialProviderSource.IMMEDIATE, this, layer, consumer);
     }
 }
