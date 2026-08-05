@@ -4,6 +4,9 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import dev.alex.threadium.ThreadiumClient;
 import dev.alex.threadium.config.ThreadiumConfig;
 import dev.alex.threadium.config.ThreadiumRuntimeConfig;
+import dev.alex.threadium.mixin.accessor.OverlayVertexConsumerAccessor;
+import dev.alex.threadium.mixin.accessor.VertexConsumersDualAccessor;
+import dev.alex.threadium.render.modelpart.ModelPartDecalTransform1211;
 import dev.alex.threadium.render.modelpart.ModelPartGpuInstanceBackend;
 import dev.alex.threadium.render.modelpart.material.MaterialContextResolution;
 import dev.alex.threadium.render.modelpart.material.MaterialProviderSource;
@@ -21,6 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.model.ModelPart;
+import net.minecraft.client.render.OverlayVertexConsumer;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.util.math.MatrixStack;
@@ -190,17 +194,13 @@ public final class ModelPartReplacementService {
         replacementAttempts.incrementAndGet();
         if (!isRenderThread()) return fallback();
 
-        MaterialContextResolution<Object, RenderLayer> material;
-        RenderLayer1211Descriptor descriptor;
+        MaterialPath materialPath;
         ImmutableModelPartMesh mesh;
         ImmutableRootRenderTransform rootTransform;
         ImmutableModelPartBonePose pose;
         try {
-            material = materialTracker.observeResolution(consumer);
-            descriptor = RenderLayer1211Descriptor.inspect(material);
-            if (!descriptor.replacementSafe() || !ModelPartVertexReplayCommitter.supports(consumer)) {
-                return fallback();
-            }
+            materialPath = resolveMaterialPath(consumer);
+            if (materialPath == null) return fallback();
             mesh = structureInspector.cached(root);
             if (mesh == null) mesh = structureInspector.captureAndCache(root);
             rootTransform = poseInspector.captureRoot(matrices.peek());
@@ -215,12 +215,55 @@ public final class ModelPartReplacementService {
         }
 
         if (pose.drawVisibleCount() == 0) return accept("empty validated instance");
+        if (materialPath.crumbling != null) {
+            if (!gpuConfigured()) return fallback();
+            try {
+                ModelPartGpuInstanceBackend backend = gpuBackend();
+                boolean queued = materialPath.base == null
+                        ? backend.queue(
+                                materialPath.crumbling.provider,
+                                materialPath.crumbling.descriptor,
+                                mesh,
+                                pose,
+                                rootTransform,
+                                light,
+                                overlay,
+                                color,
+                                materialPath.decal,
+                                worldGeneration,
+                                resourceGeneration)
+                        : backend.queuePair(
+                                materialPath.base.provider,
+                                materialPath.base.descriptor,
+                                materialPath.crumbling.provider,
+                                materialPath.crumbling.descriptor,
+                                mesh,
+                                pose,
+                                rootTransform,
+                                light,
+                                overlay,
+                                color,
+                                materialPath.decal,
+                                worldGeneration,
+                                resourceGeneration);
+                if (!queued) return fallback();
+                return accept(
+                        materialPath.base == null
+                                ? "Threadium-owned crumbling decal queue"
+                                : "Threadium-owned atomic base and crumbling queues");
+            } catch (RuntimeException exception) {
+                disableAfterFailure("crumbling GPU queue commitment", exception);
+                return false;
+            }
+        }
+
+        MaterialBinding material = materialPath.base;
         if (gpuConfigured()) {
             try {
                 if (!gpuBackend()
                         .queue(
-                                material.provider(),
-                                descriptor,
+                                material.provider,
+                                material.descriptor,
                                 mesh,
                                 pose,
                                 rootTransform,
@@ -248,6 +291,54 @@ public final class ModelPartReplacementService {
             return true;
         }
         return accept("validated cached vertex replay");
+    }
+
+    private MaterialPath resolveMaterialPath(VertexConsumer consumer) {
+        if (consumer instanceof OverlayVertexConsumer overlay) {
+            CrumblingBinding crumbling = resolveCrumbling(overlay);
+            return crumbling == null ? null : new MaterialPath(null, crumbling.material, crumbling.decal);
+        }
+        if (consumer instanceof VertexConsumersDualAccessor dual) {
+            VertexConsumer first = dual.threadium$getFirst();
+            VertexConsumer second = dual.threadium$getSecond();
+            boolean firstOverlay = first instanceof OverlayVertexConsumer;
+            boolean secondOverlay = second instanceof OverlayVertexConsumer;
+            if (firstOverlay == secondOverlay) return null;
+            OverlayVertexConsumer overlay = (OverlayVertexConsumer) (firstOverlay ? first : second);
+            VertexConsumer baseConsumer = firstOverlay ? second : first;
+            CrumblingBinding crumbling = resolveCrumbling(overlay);
+            MaterialBinding base = resolveDirect(baseConsumer);
+            if (crumbling == null
+                    || base == null
+                    || base.descriptor.kind() == RenderLayer1211Descriptor.Kind.CRUMBLING) {
+                return null;
+            }
+            return new MaterialPath(base, crumbling.material, crumbling.decal);
+        }
+        MaterialBinding direct = resolveDirect(consumer);
+        if (direct == null
+                || direct.descriptor.kind() == RenderLayer1211Descriptor.Kind.CRUMBLING
+                || !ModelPartVertexReplayCommitter.supports(consumer)) {
+            return null;
+        }
+        return new MaterialPath(direct, null, null);
+    }
+
+    private MaterialBinding resolveDirect(VertexConsumer consumer) {
+        MaterialContextResolution<Object, RenderLayer> resolution = materialTracker.observeResolution(consumer);
+        RenderLayer1211Descriptor descriptor = RenderLayer1211Descriptor.inspect(resolution);
+        return descriptor.replacementSafe() ? new MaterialBinding(resolution.provider(), descriptor) : null;
+    }
+
+    private CrumblingBinding resolveCrumbling(OverlayVertexConsumer overlay) {
+        OverlayVertexConsumerAccessor accessor = (OverlayVertexConsumerAccessor) overlay;
+        MaterialBinding material = resolveDirect(accessor.threadium$getDelegate());
+        if (material == null || material.descriptor.kind() != RenderLayer1211Descriptor.Kind.CRUMBLING) return null;
+        ModelPartDecalTransform1211 decal = ModelPartDecalTransform1211.capture(
+                accessor.threadium$getInverseTextureMatrix(),
+                accessor.threadium$getInverseNormalMatrix(),
+                accessor.threadium$getTextureScale());
+        return decal.finite() ? new CrumblingBinding(material, decal) : null;
     }
 
     private boolean accept(String path) {
@@ -341,6 +432,12 @@ public final class ModelPartReplacementService {
             throw new IllegalStateException("Threadium replacement state is not on the Render Thread");
         }
     }
+
+    private record MaterialBinding(Object provider, RenderLayer1211Descriptor descriptor) {}
+
+    private record CrumblingBinding(MaterialBinding material, ModelPartDecalTransform1211 decal) {}
+
+    private record MaterialPath(MaterialBinding base, MaterialBinding crumbling, ModelPartDecalTransform1211 decal) {}
 
     public record Diagnostics(
             boolean configured,

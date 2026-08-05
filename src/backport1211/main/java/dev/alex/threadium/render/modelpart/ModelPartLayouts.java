@@ -8,6 +8,7 @@ public final class ModelPartLayouts {
             INSTANCE_BONE_BASE_OFFSET = 64,
             INSTANCE_LIGHT_OFFSET = 68,
             INSTANCE_OVERLAY_OFFSET = 72,
+            INSTANCE_DECAL_BASE_OFFSET = 76,
             INSTANCE_TINT_OFFSET = 80,
             INSTANCE_UV_TRANSFORM_OFFSET = 96;
 

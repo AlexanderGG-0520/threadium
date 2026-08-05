@@ -50,6 +50,12 @@ void main() {
         return;
     }
 
+    if (uShaderMode == 8) {
+        if (color.a < 0.1) discard;
+        outColor = color * uColorModulator;
+        return;
+    }
+
     if (uAlphaCutout != 0 && uShaderMode != 1 && color.a < 0.1) discard;
 
     if (uShaderMode == 10) {

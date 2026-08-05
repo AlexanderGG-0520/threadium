@@ -47,8 +47,11 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     private int program;
     private int boneBuffer;
     private int boneTexture;
+    private int decalBuffer;
+    private int decalTexture;
     private int instanceBuffer;
     private ByteBuffer boneStaging;
+    private ByteBuffer decalStaging;
     private ByteBuffer instanceStaging;
     private int queuedInstances;
     private long submittedInstances;
@@ -83,47 +86,178 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             int color,
             long worldGeneration,
             long resourceGeneration) {
+        return queue(
+                provider,
+                descriptor,
+                mesh,
+                pose,
+                root,
+                light,
+                overlay,
+                color,
+                null,
+                worldGeneration,
+                resourceGeneration);
+    }
+
+    public boolean queue(
+            Object provider,
+            RenderLayer1211Descriptor descriptor,
+            ImmutableModelPartMesh mesh,
+            ImmutableModelPartBonePose pose,
+            ImmutableRootRenderTransform root,
+            int light,
+            int overlay,
+            int color,
+            ModelPartDecalTransform1211 decal,
+            long worldGeneration,
+            long resourceGeneration) {
         requireOpenRenderThread();
-        RenderLayer layer = descriptor == null ? null : descriptor.layer();
-        if (!configured()
-                || !(provider instanceof VertexConsumerProvider.Immediate)
-                || descriptor == null
-                || !descriptor.replacementSafe()
-                || layer == null
-                || mesh == null
-                || pose == null
-                || root == null
-                || !pose.finite()
-                || !root.finite()
-                || pose.boneCount() != mesh.partCount()
-                || pose.boneCount() > config.gpuMaxBonesPerModel()
-                || mesh.vertexCount() > config.gpuMaxVerticesPerMesh()
-                || mesh.indexCount() > config.gpuMaxIndicesPerMesh()
-                || queuedInstances >= maximumQueuedInstances
+        if (!validGeometry(mesh, pose, root, 1) || !validMaterial(provider, descriptor, decal) || !ensureReady()) {
+            return false;
+        }
+        MeshHandle handle = meshHandle(mesh);
+        if (handle == null) return false;
+        append(
+                provider,
+                new Entry(
+                        handle,
+                        descriptor,
+                        pose,
+                        root,
+                        light,
+                        overlay,
+                        color,
+                        decal,
+                        worldGeneration,
+                        resourceGeneration));
+        return true;
+    }
+
+    public boolean queuePair(
+            Object baseProvider,
+            RenderLayer1211Descriptor baseDescriptor,
+            Object crumblingProvider,
+            RenderLayer1211Descriptor crumblingDescriptor,
+            ImmutableModelPartMesh mesh,
+            ImmutableModelPartBonePose pose,
+            ImmutableRootRenderTransform root,
+            int light,
+            int overlay,
+            int color,
+            ModelPartDecalTransform1211 decal,
+            long worldGeneration,
+            long resourceGeneration) {
+        requireOpenRenderThread();
+        if (!validGeometry(mesh, pose, root, 2)
+                || !validMaterial(baseProvider, baseDescriptor, null)
+                || !validMaterial(crumblingProvider, crumblingDescriptor, decal)
                 || !ensureReady()) {
             return false;
         }
-        MeshHandle handle = meshes.get(mesh);
-        if (handle == null) {
-            handle = upload(mesh);
-            if (handle == null) return false;
-            if (meshes.size() >= config.gpuMaxCachedMeshes()
-                    || Math.addExact(cachedMeshBytes, handle.bytes) > config.gpuMaxMeshBytes()) {
-                handle.delete();
-                return false;
-            }
-            meshes.put(mesh, handle);
-            cachedMeshBytes = Math.addExact(cachedMeshBytes, handle.bytes);
-        }
-        IdentityHashMap<RenderLayer, Batch> providerBatches =
-                queued.computeIfAbsent(provider, ignored -> new IdentityHashMap<>());
-        providerBatches
-                .computeIfAbsent(layer, ignored -> new Batch())
-                .entries
-                .add(new Entry(
-                        handle, descriptor, pose, root, light, overlay, color, worldGeneration, resourceGeneration));
-        queuedInstances++;
+        MeshHandle handle = meshHandle(mesh);
+        if (handle == null) return false;
+        Entry base = new Entry(
+                handle, baseDescriptor, pose, root, light, overlay, color, null, worldGeneration, resourceGeneration);
+        Entry crumbling = new Entry(
+                handle,
+                crumblingDescriptor,
+                pose,
+                root,
+                light,
+                overlay,
+                color,
+                decal,
+                worldGeneration,
+                resourceGeneration);
+        appendPair(baseProvider, base, crumblingProvider, crumbling);
         return true;
+    }
+
+    private boolean validGeometry(
+            ImmutableModelPartMesh mesh,
+            ImmutableModelPartBonePose pose,
+            ImmutableRootRenderTransform root,
+            int count) {
+        return configured()
+                && mesh != null
+                && pose != null
+                && root != null
+                && pose.finite()
+                && root.finite()
+                && pose.boneCount() == mesh.partCount()
+                && pose.boneCount() <= config.gpuMaxBonesPerModel()
+                && mesh.vertexCount() <= config.gpuMaxVerticesPerMesh()
+                && mesh.indexCount() <= config.gpuMaxIndicesPerMesh()
+                && count > 0
+                && queuedInstances <= maximumQueuedInstances - count;
+    }
+
+    private static boolean validMaterial(
+            Object provider, RenderLayer1211Descriptor descriptor, ModelPartDecalTransform1211 decal) {
+        if (!(provider instanceof VertexConsumerProvider.Immediate)
+                || descriptor == null
+                || !descriptor.replacementSafe()
+                || descriptor.layer() == null) {
+            return false;
+        }
+        boolean crumbling = descriptor.kind() == RenderLayer1211Descriptor.Kind.CRUMBLING;
+        return crumbling == (decal != null) && (decal == null || decal.finite());
+    }
+
+    private MeshHandle meshHandle(ImmutableModelPartMesh mesh) {
+        MeshHandle handle = meshes.get(mesh);
+        if (handle != null) return handle;
+        handle = upload(mesh);
+        if (handle == null) return null;
+        if (meshes.size() >= config.gpuMaxCachedMeshes()
+                || Math.addExact(cachedMeshBytes, handle.bytes) > config.gpuMaxMeshBytes()) {
+            handle.delete();
+            return null;
+        }
+        meshes.put(mesh, handle);
+        cachedMeshBytes = Math.addExact(cachedMeshBytes, handle.bytes);
+        return handle;
+    }
+
+    private void append(Object provider, Entry entry) {
+        batch(provider, entry.descriptor.layer()).entries.add(entry);
+        queuedInstances++;
+    }
+
+    private void appendPair(Object firstProvider, Entry first, Object secondProvider, Entry second) {
+        Batch firstBatch = batch(firstProvider, first.descriptor.layer());
+        Batch secondBatch = batch(secondProvider, second.descriptor.layer());
+        int firstSize = firstBatch.entries.size();
+        int secondSize = secondBatch == firstBatch ? firstSize : secondBatch.entries.size();
+        try {
+            firstBatch.entries.add(first);
+            secondBatch.entries.add(second);
+            queuedInstances += 2;
+        } catch (Throwable failure) {
+            truncate(firstBatch.entries, firstSize);
+            if (secondBatch != firstBatch) truncate(secondBatch.entries, secondSize);
+            removeEmptyBatch(firstProvider, first.descriptor.layer(), firstBatch);
+            removeEmptyBatch(secondProvider, second.descriptor.layer(), secondBatch);
+            throw failure;
+        }
+    }
+
+    private Batch batch(Object provider, RenderLayer layer) {
+        return queued.computeIfAbsent(provider, ignored -> new IdentityHashMap<>())
+                .computeIfAbsent(layer, ignored -> new Batch());
+    }
+
+    private void removeEmptyBatch(Object provider, RenderLayer layer, Batch expected) {
+        if (!expected.entries.isEmpty()) return;
+        IdentityHashMap<RenderLayer, Batch> providerBatches = queued.get(provider);
+        if (providerBatches == null || providerBatches.get(layer) != expected) return;
+        providerBatches.remove(layer);
+        if (providerBatches.isEmpty()) queued.remove(provider);
+    }
+
+    private static void truncate(ArrayList<Entry> entries, int size) {
+        while (entries.size() > size) entries.removeLast();
     }
 
     public boolean flush(
@@ -216,6 +350,8 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                     read("/assets/threadium/shaders/modelpart_gl33_1211.frag"));
             boneBuffer = GL15C.glGenBuffers();
             boneTexture = GL11C.glGenTextures();
+            decalBuffer = GL15C.glGenBuffers();
+            decalTexture = GL11C.glGenTextures();
             instanceBuffer = GL15C.glGenBuffers();
 
             GL15C.glBindBuffer(GL31C.GL_TEXTURE_BUFFER, boneBuffer);
@@ -226,6 +362,14 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL11C.glBindTexture(GL31C.GL_TEXTURE_BUFFER, boneTexture);
             GL31C.glTexBuffer(GL31C.GL_TEXTURE_BUFFER, GL30C.GL_RGBA32F, boneBuffer);
 
+            GL15C.glBindBuffer(GL31C.GL_TEXTURE_BUFFER, decalBuffer);
+            GL15C.glBufferData(
+                    GL31C.GL_TEXTURE_BUFFER,
+                    (long) maximumQueuedInstances * ModelPartLayouts.BONE_STRIDE,
+                    GL15C.GL_STREAM_DRAW);
+            GL11C.glBindTexture(GL31C.GL_TEXTURE_BUFFER, decalTexture);
+            GL31C.glTexBuffer(GL31C.GL_TEXTURE_BUFFER, GL30C.GL_RGBA32F, decalBuffer);
+
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, instanceBuffer);
             GL15C.glBufferData(
                     GL15C.GL_ARRAY_BUFFER,
@@ -234,6 +378,8 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
 
             boneStaging =
                     MemoryUtil.memAlloc(ModelPartLayouts.bytes(maximumUploadedBones, ModelPartLayouts.BONE_STRIDE));
+            decalStaging =
+                    MemoryUtil.memAlloc(ModelPartLayouts.bytes(maximumQueuedInstances, ModelPartLayouts.BONE_STRIDE));
             instanceStaging = MemoryUtil.memAlloc(
                     ModelPartLayouts.bytes(maximumQueuedInstances, ModelPartLayouts.INSTANCE_STRIDE));
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, 0);
@@ -286,7 +432,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                         offsets[location]);
             }
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, instanceBuffer);
-            for (int location = 4; location <= 11; location++) {
+            for (int location = 4; location <= 12; location++) {
                 GL20C.glEnableVertexAttribArray(location);
                 GL33C.glVertexAttribDivisor(location, 1);
             }
@@ -340,6 +486,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             keys[index] = entries.get(index).mesh;
         }
         RenderLayer1211Descriptor descriptor = entries.getFirst().descriptor;
+        boolean crumbling = descriptor.kind() == RenderLayer1211Descriptor.Kind.CRUMBLING;
         boolean sorted = descriptor.submissionPolicy() == RenderLayer1211Descriptor.SubmissionPolicy.SORTED_QUAD_STREAM;
         boolean reorderable =
                 descriptor.submissionPolicy() == RenderLayer1211Descriptor.SubmissionPolicy.OPAQUE_BATCHED;
@@ -349,12 +496,23 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         int[] packedIndexBySource = new int[entryCount];
         ByteBuffer instances =
                 instanceStaging.clear().limit(ModelPartLayouts.bytes(entryCount, ModelPartLayouts.INSTANCE_STRIDE));
+        ByteBuffer decals = crumbling
+                ? decalStaging.clear().limit(ModelPartLayouts.bytes(entryCount, ModelPartLayouts.BONE_STRIDE))
+                : null;
         for (int packed = 0; packed < entryCount; packed++) {
             int source = plan.packedSourceIndices()[packed];
+            Entry entry = entries.get(source);
             packedIndexBySource[source] = packed;
-            putInstance(instances, entries.get(source), boneBaseBySource[source]);
+            int decalBase = -1;
+            if (crumbling) {
+                if (entry.decal == null) throw new IllegalStateException("Missing crumbling decal transform");
+                decalBase = packed;
+                putDecal(decals, entry.decal);
+            }
+            putInstance(instances, entry, boneBaseBySource[source], decalBase);
         }
         instances.flip();
+        if (decals != null) decals.flip();
         ArrayList<SortedModelPartQuads.Reference> sortedReferences = sorted ? collectSortedReferences(entries) : null;
 
         OpenGlStateSnapshot1211 previous = OpenGlStateSnapshot1211.capture();
@@ -371,7 +529,10 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
 
             GL13C.glActiveTexture(GL13C.GL_TEXTURE3);
             GL11C.glBindTexture(GL31C.GL_TEXTURE_BUFFER, boneTexture);
-            GL20C.glUniform1i(GL20C.glGetUniformLocation(program, "Bones"), 3);
+            GL20C.glUniform1i(uniform(program, "Bones"), 3);
+            GL13C.glActiveTexture(GL13C.GL_TEXTURE4);
+            GL11C.glBindTexture(GL31C.GL_TEXTURE_BUFFER, decalTexture);
+            GL20C.glUniform1i(uniform(program, "Decals"), 4);
 
             GL15C.glBindBuffer(GL31C.GL_TEXTURE_BUFFER, boneBuffer);
             GL15C.glBufferData(
@@ -381,6 +542,15 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL15C.glBufferSubData(GL31C.GL_TEXTURE_BUFFER, 0, bones);
             boneUploadCalls++;
             boneBytes = Math.addExact(boneBytes, bones.remaining());
+
+            if (decals != null) {
+                GL15C.glBindBuffer(GL31C.GL_TEXTURE_BUFFER, decalBuffer);
+                GL15C.glBufferData(
+                        GL31C.GL_TEXTURE_BUFFER,
+                        (long) maximumQueuedInstances * ModelPartLayouts.BONE_STRIDE,
+                        GL15C.GL_STREAM_DRAW);
+                GL15C.glBufferSubData(GL31C.GL_TEXTURE_BUFFER, 0, decals);
+            }
 
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, instanceBuffer);
             GL15C.glBufferData(
@@ -475,11 +645,17 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         }
     }
 
-    private static void putInstance(ByteBuffer output, Entry entry, int boneBase) {
+    private static void putDecal(ByteBuffer output, ModelPartDecalTransform1211 decal) {
+        for (int element = 0; element < ModelPartDecalTransform1211.ELEMENTS; element++) {
+            output.putFloat(Float.intBitsToFloat(decal.elementBits(element)));
+        }
+    }
+
+    private static void putInstance(ByteBuffer output, Entry entry, int boneBase, int decalBase) {
         for (int element = 0; element < ImmutableRootRenderTransform.POSITION_ELEMENTS; element++) {
             output.putFloat(Float.intBitsToFloat(entry.root.positionElementBits(element)));
         }
-        output.putInt(boneBase).putInt(entry.light).putInt(entry.overlay);
+        output.putInt(boneBase).putInt(entry.light).putInt(entry.overlay).putInt(decalBase);
         output.put((byte) (entry.color >>> 16))
                 .put((byte) (entry.color >>> 8))
                 .put((byte) entry.color)
@@ -511,6 +687,12 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                 true,
                 ModelPartLayouts.INSTANCE_STRIDE,
                 base + ModelPartLayouts.INSTANCE_TINT_OFFSET);
+        GL30C.glVertexAttribIPointer(
+                12,
+                1,
+                GL11C.GL_INT,
+                ModelPartLayouts.INSTANCE_STRIDE,
+                base + ModelPartLayouts.INSTANCE_DECAL_BASE_OFFSET);
     }
 
     private static void bindTextures(int program) {
@@ -586,14 +768,20 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         if (program != 0) GL20C.glDeleteProgram(program);
         if (boneBuffer != 0) GL15C.glDeleteBuffers(boneBuffer);
         if (boneTexture != 0) GL11C.glDeleteTextures(boneTexture);
+        if (decalBuffer != 0) GL15C.glDeleteBuffers(decalBuffer);
+        if (decalTexture != 0) GL11C.glDeleteTextures(decalTexture);
         if (instanceBuffer != 0) GL15C.glDeleteBuffers(instanceBuffer);
         if (boneStaging != null) MemoryUtil.memFree(boneStaging);
+        if (decalStaging != null) MemoryUtil.memFree(decalStaging);
         if (instanceStaging != null) MemoryUtil.memFree(instanceStaging);
         program = 0;
         boneBuffer = 0;
         boneTexture = 0;
+        decalBuffer = 0;
+        decalTexture = 0;
         instanceBuffer = 0;
         boneStaging = null;
+        decalStaging = null;
         instanceStaging = null;
     }
 
@@ -665,6 +853,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             int light,
             int overlay,
             int color,
+            ModelPartDecalTransform1211 decal,
             long worldGeneration,
             long resourceGeneration) {}
 
