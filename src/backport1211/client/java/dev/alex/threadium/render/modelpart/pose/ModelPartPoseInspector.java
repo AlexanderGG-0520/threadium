@@ -26,6 +26,7 @@ public final class ModelPartPoseInspector {
 
     private final ModelPartPoseCache cache =
             new ModelPartPoseCache(MAXIMUM_UNIQUE_POSES_PER_FRAME, MAXIMUM_RETAINED_POSE_BYTES_PER_FRAME);
+    private final FrameModelPartPoseArena arena = new FrameModelPartPoseArena(CAPTURE_LIMITS);
 
     public ImmutableRootRenderTransform captureRoot(MatrixStack.Entry incomingEntry) {
         Objects.requireNonNull(incomingEntry, "incomingEntry");
@@ -40,12 +41,13 @@ public final class ModelPartPoseInspector {
         Objects.requireNonNull(root, "root");
         Objects.requireNonNull(mesh, "mesh");
 
-        ModelPartPoseCapture capture = new ModelPartPoseCapture(mesh.partCount(), CAPTURE_LIMITS);
+        ModelPartPoseCapture capture = arena.acquire(mesh.partCount());
         MinecraftReader reader = new MinecraftReader(new MatrixStack());
         ImmutableModelPartBonePose candidate =
                 ModelPartPoseTraversal.capture(root, mesh.structure(), reader, capture, MAXIMUM_DEPTH);
-        ModelPartPoseCache.InternResult interned = cache.intern(candidate);
-        return new PoseObservation(interned.pose(), interned.hit());
+        ModelPartPoseCache.InternResult interned = cache.intern(mesh, candidate);
+        return new PoseObservation(
+                interned.pose(), interned.hit(), interned.lookupPerformed(), interned.stored(), interned.bypassed());
     }
 
     public int uniquePoseCount() {
@@ -58,17 +60,28 @@ public final class ModelPartPoseInspector {
 
     public void beginFrame() {
         cache.clear();
+        arena.beginFrame();
     }
 
     public void clear() {
         cache.clear();
+        arena.clear();
     }
 
     private static boolean requiresNormalization(MatrixStack.Entry entry) {
         return !((MatrixStackEntryAccessor) (Object) entry).threadium$canSkipNormalization();
     }
 
-    public record PoseObservation(ImmutableModelPartBonePose pose, boolean poseCacheHit) {}
+    public record PoseObservation(
+            ImmutableModelPartBonePose pose,
+            boolean poseCacheHit,
+            boolean lookupPerformed,
+            boolean stored,
+            boolean directPacked) {
+        public PoseObservation(ImmutableModelPartBonePose pose, boolean poseCacheHit) {
+            this(pose, poseCacheHit, true, !poseCacheHit, false);
+        }
+    }
 
     private static final class MinecraftReader implements ModelPartPoseTraversal.Reader<ModelPart> {
         private final MatrixStack matrices;

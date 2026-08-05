@@ -74,6 +74,14 @@ public final class ModelPartPoseCapture {
         capturedBones++;
     }
 
+    void resetForFrameReuse() {
+        capturedBones = 0;
+        completed = false;
+        java.util.Arrays.fill(treeVisible, 0L);
+        java.util.Arrays.fill(drawVisible, 0L);
+        java.util.Arrays.fill(normalNeedsNormalization, 0L);
+    }
+
     public ImmutableModelPartBonePose complete() {
         ensureOpen();
         if (capturedBones != boneCount) throw new IllegalStateException("Pose capture is incomplete");
