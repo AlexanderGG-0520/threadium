@@ -1,6 +1,7 @@
 package dev.alex.threadium.render.modelpart.material;
 
 import com.google.common.collect.ImmutableList;
+import dev.alex.threadium.mixin.accessor.RenderLayerAccessor;
 import dev.alex.threadium.mixin.accessor.RenderLayerMultiPhaseAccessor;
 import dev.alex.threadium.mixin.accessor.RenderLayerMultiPhaseParametersAccessor;
 import dev.alex.threadium.mixin.accessor.RenderPhaseTextureAccessor;
@@ -41,7 +42,7 @@ public record RenderLayer1211Descriptor(
                 inspection.exactSupportedLayer(),
                 inspection.texture() != null,
                 layer != null && layer.isOutline(),
-                layer != null && layer.isTranslucent(),
+                layer != null && ((RenderLayerAccessor) layer).threadium$isTranslucent(),
                 layer != null && layer.hasCrumbling());
         return new RenderLayer1211Descriptor(layer, inspection.texture(), policy);
     }
@@ -52,7 +53,8 @@ public record RenderLayer1211Descriptor(
                 || layer.getVertexFormat() != ENTITY_CUTOUT_NO_CULL_TEMPLATE.getVertexFormat()
                 || layer.getDrawMode() != ENTITY_CUTOUT_NO_CULL_TEMPLATE.getDrawMode()
                 || layer.hasCrumbling() != ENTITY_CUTOUT_NO_CULL_TEMPLATE.hasCrumbling()
-                || layer.isTranslucent() != ENTITY_CUTOUT_NO_CULL_TEMPLATE.isTranslucent()
+                || ((RenderLayerAccessor) layer).threadium$isTranslucent()
+                        != ((RenderLayerAccessor) ENTITY_CUTOUT_NO_CULL_TEMPLATE).threadium$isTranslucent()
                 || layer.isOutline() != ENTITY_CUTOUT_NO_CULL_TEMPLATE.isOutline()
                 || layer.getAffectedOutline().isPresent()
                         != ENTITY_CUTOUT_NO_CULL_TEMPLATE.getAffectedOutline().isPresent()) {
