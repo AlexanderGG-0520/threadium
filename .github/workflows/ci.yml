@@ -24,7 +24,7 @@ jobs:
           ref: agent/mc1211-m3c-immediatelyfast-observation
           fetch-depth: 0
 
-      - name: Apply pending RenderLayer parity bundle
+      - name: Apply pending RenderLayer parity sources
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -42,13 +42,14 @@ jobs:
           echo '0d7bbc90ac195968d855a5200321bf4b9481a83cba4a606ccc2b04c1bae0af91  /tmp/threadium-pending-parity.tar.gz' \
             | sha256sum --check
           tar -xzf /tmp/threadium-pending-parity.tar.gz
+          git checkout -- .github/workflows/ci.yml
           git diff --check
-          if git diff --quiet && test -z "$(git status --porcelain --untracked-files=all)"; then
-            echo 'Parity bundle is already applied.'
+          if git diff --quiet -- src/backport1211 && test -z "$(git status --porcelain --untracked-files=all src/backport1211)"; then
+            echo 'Parity sources are already applied.'
           else
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add .github/workflows/ci.yml src/backport1211
+            git add src/backport1211
             git commit -m 'Expand 1.21.1 canonical RenderLayer support'
             git push origin HEAD:agent/mc1211-m3c-immediatelyfast-observation
           fi
