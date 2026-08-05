@@ -15,7 +15,7 @@ jobs:
       - name: Check out workspace branch
         uses: actions/checkout@v4
 
-      - name: Package repository
+      - name: Package current post-outline repository
         shell: bash
         run: |
           set -euo pipefail
