@@ -4,6 +4,7 @@ package dev.alex.threadium.render.modelpart.material;
 public enum MaterialProviderSource {
     IMMEDIATE,
     OUTLINE,
+    IMMEDIATELY_FAST,
     OTHER_VERIFIED,
     UNAVAILABLE
 }
