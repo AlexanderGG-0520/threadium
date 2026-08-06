@@ -1,0 +1,37 @@
+name: Export Minecraft 1.21.1 differential workspaces
+
+on:
+  pull_request:
+    branches:
+      - mc1.21.1/fabric/dev
+
+permissions:
+  contents: read
+
+jobs:
+  export-workspaces:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out current Minecraft 1.21.1 workspace
+        uses: actions/checkout@v4
+        with:
+          path: current
+
+      - name: Check out Minecraft 26.2 reference workspace
+        uses: actions/checkout@v4
+        with:
+          ref: mc26.2/fabric/dev
+          path: reference
+
+      - name: Package workspaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude=.git --exclude=build --exclude=.gradle -czf /tmp/threadium-differential-workspaces.tar.gz current reference
+
+      - name: Upload workspaces
+        uses: actions/upload-artifact@v4
+        with:
+          name: threadium-differential-workspaces
+          path: /tmp/threadium-differential-workspaces.tar.gz
+          retention-days: 1
