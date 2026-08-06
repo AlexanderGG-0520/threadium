@@ -8,6 +8,7 @@ import dev.alex.threadium.mixin.accessor.OutlineVertexConsumerAccessor;
 import dev.alex.threadium.mixin.accessor.OverlayVertexConsumerAccessor;
 import dev.alex.threadium.mixin.accessor.VertexConsumersDualAccessor;
 import dev.alex.threadium.render.modelpart.AdaptiveModelPartBatchGate;
+import dev.alex.threadium.render.modelpart.DifferentialExecutionScope;
 import dev.alex.threadium.render.modelpart.ModelPart1211Metrics;
 import dev.alex.threadium.render.modelpart.ModelPart1211Metrics.FallbackReason;
 import dev.alex.threadium.render.modelpart.ModelPartDecalTransform1211;
@@ -108,6 +109,7 @@ public final class ModelPartReplacementService {
             }
         }
         current.reportMetricsIfDue();
+        if (DifferentialExecutionScope.active()) DifferentialExecutionScope.reset();
         current.renderDepth = 0;
         current.renderGroupOwners.clear();
         current.batchProfitability.beginFrame();
@@ -281,7 +283,6 @@ public final class ModelPartReplacementService {
 
             boolean gpuReplacement = gpuConfigured();
             Object groupOwner = currentRenderGroupOwner();
-            if (gpuReplacement && groupOwner == null) return fallback(FallbackReason.UNSCOPED, null);
 
             MaterialPath materialPath;
             ImmutableModelPartMesh mesh;
@@ -292,7 +293,12 @@ public final class ModelPartReplacementService {
                 materialPath = resolveMaterialPath(consumer);
                 materialNanos = metrics.delta(materialStart);
                 if (materialPath == null) return fallback(FallbackReason.MATERIAL, null);
+                String canonical = materialPath.canonical();
+                if (DifferentialExecutionScope.referenceBypass(canonical)) return false;
+                if (gpuReplacement && groupOwner == null) return fallback(FallbackReason.UNSCOPED, materialPath);
+                boolean differentialCandidate = DifferentialExecutionScope.candidateRequiresAcceptance(canonical);
                 if (gpuReplacement
+                        && !differentialCandidate
                         && !batchProfitability.observeAndShouldReplace(
                                 groupOwner, root, materialPath.batchType(), minimumGroupSubmits)) {
                     return fallback(FallbackReason.ADAPTIVE, materialPath);
@@ -323,7 +329,7 @@ public final class ModelPartReplacementService {
             }
 
             if (pose.drawVisibleCount() == 0) {
-                return accept("empty validated instance", true, false, false);
+                return accept("empty validated instance", materialPath, true, false, false);
             }
             long queueStart = metrics.now();
             if (materialPath.crumbling != null) {
@@ -365,6 +371,7 @@ public final class ModelPartReplacementService {
                             materialPath.base == null
                                     ? "Threadium-owned crumbling decal queue"
                                     : "Threadium-owned atomic base and crumbling queues",
+                            materialPath,
                             false,
                             true,
                             false);
@@ -413,6 +420,7 @@ public final class ModelPartReplacementService {
                             materialPath.base == null
                                     ? "Threadium-owned outline queue"
                                     : "Threadium-owned atomic base and outline queues",
+                            materialPath,
                             false,
                             true,
                             false);
@@ -442,7 +450,7 @@ public final class ModelPartReplacementService {
                         return fallback(FallbackReason.CAPACITY, materialPath);
                     }
                     queueNanos = metrics.delta(queueStart);
-                    return accept("Threadium-owned GPU instance queue", false, true, false);
+                    return accept("Threadium-owned GPU instance queue", materialPath, false, true, false);
                 } catch (RuntimeException exception) {
                     disableAfterFailure("GPU instance queue commitment", exception);
                     return false;
@@ -459,7 +467,7 @@ public final class ModelPartReplacementService {
                 disableAfterFailure("destination commit", exception);
                 return true;
             }
-            return accept("validated cached vertex replay", false, false, true);
+            return accept("validated cached vertex replay", materialPath, false, false, true);
         } finally {
             metrics.recordInterceptTiming(
                     metrics.delta(interceptStart), materialNanos, meshNanos, poseNanos, queueNanos);
@@ -550,9 +558,10 @@ public final class ModelPartReplacementService {
         return renderGroupOwners.isEmpty() ? null : renderGroupOwners.getLast();
     }
 
-    private boolean accept(String path, boolean empty, boolean gpu, boolean cpuReplay) {
+    private boolean accept(String path, MaterialPath materialPath, boolean empty, boolean gpu, boolean cpuReplay) {
         replacementAccepts.incrementAndGet();
         metrics.recordAccepted(empty, gpu, cpuReplay);
+        if (materialPath != null) DifferentialExecutionScope.completed(materialPath.canonical(), true);
         if (!replacementLogged) {
             replacementLogged = true;
             ThreadiumClient.LOGGER.info("Threadium replaced a Minecraft 1.21.1 ModelPart draw through {}", path);
@@ -563,6 +572,8 @@ public final class ModelPartReplacementService {
     private boolean fallback(FallbackReason reason, MaterialPath materialPath) {
         replacementFallbacks.incrementAndGet();
         metrics.recordFallback(reason);
+        DifferentialExecutionScope.fallbackReason(reason.name().toLowerCase(java.util.Locale.ROOT));
+        if (materialPath != null) DifferentialExecutionScope.completed(materialPath.canonical(), false);
         if (materialPath != null) materialPath.recordPipelineFallback(metrics);
         else if (reason == FallbackReason.MATERIAL) {
             metrics.recordPipelineFallback(RenderLayer1211Descriptor.Kind.UNSUPPORTED);
@@ -605,6 +616,7 @@ public final class ModelPartReplacementService {
         structureInspector.clear();
         poseInspector.clear();
         materialTracker.clearLifecycle();
+        DifferentialExecutionScope.reset();
         batchProfitability.clear();
         renderGroupOwners.clear();
         renderDepth = 0;
@@ -672,6 +684,7 @@ public final class ModelPartReplacementService {
         structureInspector.clear();
         poseInspector.clear();
         materialTracker.clearLifecycle();
+        DifferentialExecutionScope.reset();
         batchProfitability.clear();
         renderGroupOwners.clear();
         renderDepth = 0;
@@ -716,6 +729,14 @@ public final class ModelPartReplacementService {
             if (base != null) return base.descriptor.layer();
             if (crumbling != null) return crumbling.descriptor.layer();
             return outline == null ? null : outline.material.descriptor.layer();
+        }
+
+        private String canonical() {
+            RenderLayer1211Descriptor.Kind kind;
+            if (outline != null) kind = outline.material.descriptor.kind();
+            else if (crumbling != null) kind = crumbling.descriptor.kind();
+            else kind = base == null ? RenderLayer1211Descriptor.Kind.UNSUPPORTED : base.descriptor.kind();
+            return kind.name().toLowerCase(java.util.Locale.ROOT);
         }
 
         private void recordPipelineFallback(ModelPart1211Metrics metrics) {
