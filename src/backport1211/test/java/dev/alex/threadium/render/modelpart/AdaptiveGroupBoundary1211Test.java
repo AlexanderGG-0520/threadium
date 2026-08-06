@@ -41,7 +41,8 @@ class AdaptiveGroupBoundary1211Test {
                 "java", "dev", "alex", "threadium", "render", "modelpart", "ModelPartGpuInstanceBackend.java")));
 
         assertTrue(backend.contains("IdentityHashMap<Object, IdentityHashMap<MeshHandle, Object>> groupMeshKeys"));
-        assertTrue(backend.contains("computeIfAbsent(entry.groupOwner"));
+        assertTrue(backend.contains("Object groupOwner = entries.groupOwner(index);"));
+        assertTrue(backend.contains("computeIfAbsent(groupOwner"));
         assertTrue(backend.contains("IdentityHashMap<Object, ModelPartFlushStats> flush("));
         assertTrue(backend.contains("MutableFlushStats"));
         assertTrue(backend.contains("stats.totalInstancesInMultiDraws += instanceCount"));
