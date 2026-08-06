@@ -32,7 +32,9 @@ class OutlineReplacementPath1211Test {
 
         assertTrue(service.contains("backend.queueOutlinePair("));
         assertTrue(backend.contains("public boolean queueOutlinePair("));
-        assertTrue(backend.contains("appendPair(baseProvider, base, outlineProvider, outline);"));
+        assertTrue(backend.contains("outlineProvider,"));
+        assertTrue(backend.contains("outlineDescriptor,"));
+        assertTrue(backend.contains("private void appendPair("));
         assertTrue(immediateMixin.contains("ModelPartReplacementService.flushProviderLayer(this, layer);"));
     }
 }
