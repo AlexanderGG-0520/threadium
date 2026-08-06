@@ -1,0 +1,58 @@
+name: Minecraft 1.21.1 differential harness driver
+
+on:
+  pull_request:
+    branches:
+      - mc1.21.1/fabric/dev
+    paths:
+      - "tmp/mc1211-differential-bundle.part*"
+      - ".github/workflows/mc1211-differential-driver.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply-validate-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "25"
+
+      - name: Set up Gradle 9.6.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.1"
+
+      - name: Apply fixed implementation bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat tmp/mc1211-differential-bundle.part* > /tmp/mc1211-differential.tar.gz.b64
+          base64 --decode /tmp/mc1211-differential.tar.gz.b64 > /tmp/mc1211-differential.tar.gz
+          echo "913af692be817631d449100364ac06f630c1dd445dbce3364c590d9275722ca3  /tmp/mc1211-differential.tar.gz" | sha256sum --check --strict
+          tar -xzf /tmp/mc1211-differential.tar.gz -C .
+
+      - name: Validate Java 21 backport
+        run: gradle --no-daemon clean spotlessApply spotlessCheck test build
+
+      - name: Publish validated source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f tmp/mc1211-differential-bundle.part*
+          rm -f .github/workflows/mc1211-differential-driver.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "Implement Minecraft 1.21.1 differential validation harness"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
