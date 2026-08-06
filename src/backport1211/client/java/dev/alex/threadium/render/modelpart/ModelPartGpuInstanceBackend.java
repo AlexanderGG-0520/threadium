@@ -13,6 +13,7 @@ import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.Objects;
@@ -45,6 +46,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     private final BackendStateMachine states = new BackendStateMachine(ModelPartBackendState.UNINITIALIZED);
     private final IdentityHashMap<ImmutableModelPartMesh, MeshHandle> meshes = new IdentityHashMap<>();
     private final IdentityHashMap<Object, IdentityHashMap<RenderLayer, Batch>> queued = new IdentityHashMap<>();
+    private final ArrayDeque<Batch> recycledBatches = new ArrayDeque<>();
     private final InstanceSubmissionOrderPlanner orderPlanner = new InstanceSubmissionOrderPlanner();
     private int program;
     private int boneBuffer;
@@ -132,18 +134,17 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         if (handle == null) return false;
         append(
                 provider,
-                new Entry(
-                        groupOwner,
-                        handle,
-                        descriptor,
-                        pose,
-                        root,
-                        light,
-                        overlay,
-                        color,
-                        decal,
-                        worldGeneration,
-                        resourceGeneration));
+                groupOwner,
+                handle,
+                descriptor,
+                pose,
+                root,
+                light,
+                overlay,
+                color,
+                decal,
+                worldGeneration,
+                resourceGeneration);
         metrics.recordQueued(descriptor.kind(), 1);
         return true;
     }
@@ -173,31 +174,23 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         }
         MeshHandle handle = meshHandle(mesh);
         if (handle == null) return false;
-        Entry base = new Entry(
-                groupOwner,
-                handle,
+        appendPair(
+                baseProvider,
                 baseDescriptor,
-                pose,
-                root,
-                light,
-                overlay,
                 color,
                 null,
-                worldGeneration,
-                resourceGeneration);
-        Entry crumbling = new Entry(
+                crumblingProvider,
+                crumblingDescriptor,
+                color,
+                decal,
                 groupOwner,
                 handle,
-                crumblingDescriptor,
                 pose,
                 root,
                 light,
                 overlay,
-                color,
-                decal,
                 worldGeneration,
                 resourceGeneration);
-        appendPair(baseProvider, base, crumblingProvider, crumbling);
         metrics.recordQueued(baseDescriptor.kind(), 1);
         metrics.recordQueued(crumblingDescriptor.kind(), 1);
         return true;
@@ -229,31 +222,23 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         }
         MeshHandle handle = meshHandle(mesh);
         if (handle == null) return false;
-        Entry base = new Entry(
-                groupOwner,
-                handle,
+        appendPair(
+                baseProvider,
                 baseDescriptor,
-                pose,
-                root,
-                light,
-                overlay,
                 baseColor,
                 null,
-                worldGeneration,
-                resourceGeneration);
-        Entry outline = new Entry(
+                outlineProvider,
+                outlineDescriptor,
+                outlineColor,
+                null,
                 groupOwner,
                 handle,
-                outlineDescriptor,
                 pose,
                 root,
                 light,
                 overlay,
-                outlineColor,
-                null,
                 worldGeneration,
                 resourceGeneration);
-        appendPair(baseProvider, base, outlineProvider, outline);
         metrics.recordQueued(baseDescriptor.kind(), 1);
         metrics.recordQueued(outlineDescriptor.kind(), 1);
         return true;
@@ -311,32 +296,110 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         return handle;
     }
 
-    private void append(Object provider, Entry entry) {
-        batch(provider, entry.descriptor.layer()).entries.add(entry);
+    private void append(
+            Object provider,
+            Object groupOwner,
+            MeshHandle mesh,
+            RenderLayer1211Descriptor descriptor,
+            ImmutableModelPartBonePose pose,
+            ImmutableRootRenderTransform root,
+            int light,
+            int overlay,
+            int color,
+            ModelPartDecalTransform1211 decal,
+            long worldGeneration,
+            long resourceGeneration) {
+        batch(provider, descriptor.layer())
+                .entries
+                .add(
+                        groupOwner,
+                        mesh,
+                        descriptor,
+                        pose,
+                        root,
+                        light,
+                        overlay,
+                        color,
+                        decal,
+                        worldGeneration,
+                        resourceGeneration);
         queuedInstances++;
     }
 
-    private void appendPair(Object firstProvider, Entry first, Object secondProvider, Entry second) {
-        Batch firstBatch = batch(firstProvider, first.descriptor.layer());
-        Batch secondBatch = batch(secondProvider, second.descriptor.layer());
+    private void appendPair(
+            Object firstProvider,
+            RenderLayer1211Descriptor firstDescriptor,
+            int firstColor,
+            ModelPartDecalTransform1211 firstDecal,
+            Object secondProvider,
+            RenderLayer1211Descriptor secondDescriptor,
+            int secondColor,
+            ModelPartDecalTransform1211 secondDecal,
+            Object groupOwner,
+            MeshHandle mesh,
+            ImmutableModelPartBonePose pose,
+            ImmutableRootRenderTransform root,
+            int light,
+            int overlay,
+            long worldGeneration,
+            long resourceGeneration) {
+        Batch firstBatch = batch(firstProvider, firstDescriptor.layer());
+        Batch secondBatch = batch(secondProvider, secondDescriptor.layer());
         int firstSize = firstBatch.entries.size();
         int secondSize = secondBatch == firstBatch ? firstSize : secondBatch.entries.size();
         try {
-            firstBatch.entries.add(first);
-            secondBatch.entries.add(second);
+            firstBatch.entries.add(
+                    groupOwner,
+                    mesh,
+                    firstDescriptor,
+                    pose,
+                    root,
+                    light,
+                    overlay,
+                    firstColor,
+                    firstDecal,
+                    worldGeneration,
+                    resourceGeneration);
+            secondBatch.entries.add(
+                    groupOwner,
+                    mesh,
+                    secondDescriptor,
+                    pose,
+                    root,
+                    light,
+                    overlay,
+                    secondColor,
+                    secondDecal,
+                    worldGeneration,
+                    resourceGeneration);
             queuedInstances += 2;
         } catch (Throwable failure) {
-            truncate(firstBatch.entries, firstSize);
-            if (secondBatch != firstBatch) truncate(secondBatch.entries, secondSize);
-            removeEmptyBatch(firstProvider, first.descriptor.layer(), firstBatch);
-            removeEmptyBatch(secondProvider, second.descriptor.layer(), secondBatch);
+            firstBatch.entries.truncate(firstSize);
+            if (secondBatch != firstBatch) secondBatch.entries.truncate(secondSize);
+            removeEmptyBatch(firstProvider, firstDescriptor.layer(), firstBatch);
+            if (secondBatch != firstBatch) removeEmptyBatch(secondProvider, secondDescriptor.layer(), secondBatch);
             throw failure;
         }
     }
 
     private Batch batch(Object provider, RenderLayer layer) {
-        return queued.computeIfAbsent(provider, ignored -> new IdentityHashMap<>())
-                .computeIfAbsent(layer, ignored -> new Batch());
+        IdentityHashMap<RenderLayer, Batch> providerBatches =
+                queued.computeIfAbsent(provider, ignored -> new IdentityHashMap<>());
+        Batch existing = providerBatches.get(layer);
+        if (existing != null) return existing;
+        Batch created = acquireBatch();
+        providerBatches.put(layer, created);
+        return created;
+    }
+
+    private Batch acquireBatch() {
+        Batch recycled = recycledBatches.pollLast();
+        return recycled != null ? recycled : new Batch(maximumQueuedInstances);
+    }
+
+    private void releaseBatch(Batch batch) {
+        batch.entries.clear();
+        if (recycledBatches.size() < 64) recycledBatches.addLast(batch);
     }
 
     private void removeEmptyBatch(Object provider, RenderLayer layer, Batch expected) {
@@ -345,10 +408,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         if (providerBatches == null || providerBatches.get(layer) != expected) return;
         providerBatches.remove(layer);
         if (providerBatches.isEmpty()) queued.remove(provider);
-    }
-
-    private static void truncate(ArrayList<Entry> entries, int size) {
-        while (entries.size() > size) entries.removeLast();
+        releaseBatch(expected);
     }
 
     public IdentityHashMap<Object, ModelPartFlushStats> flush(
@@ -360,15 +420,19 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         if (batch == null) return new IdentityHashMap<>();
         if (providerBatches.isEmpty()) queued.remove(provider);
         queuedInstances -= batch.entries.size();
-        for (Entry entry : batch.entries) {
-            if (entry.worldGeneration != currentWorldGeneration
-                    || entry.resourceGeneration != currentResourceGeneration) {
-                metrics.recordStaleSubmission();
-                fail();
-                throw new IllegalStateException("Threadium rejected a stale Minecraft 1.21.1 GPU submission");
+        try {
+            for (int index = 0; index < batch.entries.size(); index++) {
+                if (batch.entries.worldGeneration(index) != currentWorldGeneration
+                        || batch.entries.resourceGeneration(index) != currentResourceGeneration) {
+                    metrics.recordStaleSubmission();
+                    fail();
+                    throw new IllegalStateException("Threadium rejected a stale Minecraft 1.21.1 GPU submission");
+                }
             }
+            return drawBatch(layer, batch.entries);
+        } finally {
+            releaseBatch(batch);
         }
-        return drawBatch(layer, batch.entries);
     }
 
     public void verifyFrameDrained() {
@@ -550,7 +614,8 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         }
     }
 
-    private IdentityHashMap<Object, ModelPartFlushStats> drawBatch(RenderLayer layer, ArrayList<Entry> entries) {
+    private IdentityHashMap<Object, ModelPartFlushStats> drawBatch(
+            RenderLayer layer, QueuedModelPartArena1211<MeshHandle> entries) {
         if (entries.isEmpty() || !states.state().accepts()) return new IdentityHashMap<>();
         long flushStart = metrics.now();
         long planningNanos = 0L;
@@ -562,7 +627,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         int[] boneBaseBySource = new int[entryCount];
         int totalBones = 0;
         for (int index = 0; index < entryCount; index++) {
-            ImmutableModelPartBonePose pose = entries.get(index).pose;
+            ImmutableModelPartBonePose pose = entries.pose(index);
             Integer existing = boneBases.get(pose);
             if (existing == null) {
                 existing = totalBones;
@@ -586,12 +651,13 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         IdentityHashMap<Object, IdentityHashMap<MeshHandle, Object>> groupMeshKeys = new IdentityHashMap<>();
         for (int index = 0; index < entryCount; index++) {
             sourceIndices[index] = index;
-            Entry entry = entries.get(index);
+            Object groupOwner = entries.groupOwner(index);
+            MeshHandle mesh = entries.mesh(index);
             keys[index] = groupMeshKeys
-                    .computeIfAbsent(entry.groupOwner, ignored -> new IdentityHashMap<>())
-                    .computeIfAbsent(entry.mesh, ignored -> new Object());
+                    .computeIfAbsent(groupOwner, ignored -> new IdentityHashMap<>())
+                    .computeIfAbsent(mesh, ignored -> new Object());
         }
-        RenderLayer1211Descriptor descriptor = entries.getFirst().descriptor;
+        RenderLayer1211Descriptor descriptor = entries.descriptor(0);
         boolean crumbling = descriptor.kind() == RenderLayer1211Descriptor.Kind.CRUMBLING;
         boolean sorted = descriptor.submissionPolicy() == RenderLayer1211Descriptor.SubmissionPolicy.SORTED_QUAD_STREAM;
         boolean reorderable =
@@ -609,15 +675,15 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
                 : null;
         for (int packed = 0; packed < entryCount; packed++) {
             int source = plan.packedSourceIndices()[packed];
-            Entry entry = entries.get(source);
             packedIndexBySource[source] = packed;
             int decalBase = -1;
             if (crumbling) {
-                if (entry.decal == null) throw new IllegalStateException("Missing crumbling decal transform");
+                ModelPartDecalTransform1211 decal = entries.decal(source);
+                if (decal == null) throw new IllegalStateException("Missing crumbling decal transform");
                 decalBase = packed;
-                putDecal(decals, entry.decal);
+                putDecal(decals, decal);
             }
-            putInstance(instances, entry, boneBaseBySource[source], decalBase);
+            putInstance(instances, entries, source, boneBaseBySource[source], decalBase);
         }
         instances.flip();
         if (decals != null) decals.flip();
@@ -625,25 +691,25 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         ArrayList<SortedModelPartQuads.Reference> sortedReferences = sorted ? collectSortedReferences(entries) : null;
         planningNanos += metrics.delta(planningStart);
         IdentityHashMap<Object, MutableFlushStats> mutableFeedback = new IdentityHashMap<>();
-        for (Entry entry : entries) {
+        for (int index = 0; index < entryCount; index++) {
             MutableFlushStats stats =
-                    mutableFeedback.computeIfAbsent(entry.groupOwner, ignored -> new MutableFlushStats());
+                    mutableFeedback.computeIfAbsent(entries.groupOwner(index), ignored -> new MutableFlushStats());
             stats.instances++;
             if (sorted) stats.sortedInstances++;
             else stats.batchableInstances++;
         }
         if (sorted) {
             for (SortedModelPartQuads.Reference reference : sortedReferences) {
-                MutableFlushStats stats = mutableFeedback.get(entries.get(reference.sourceIndex()).groupOwner);
+                MutableFlushStats stats = mutableFeedback.get(entries.groupOwner(reference.sourceIndex()));
                 stats.drawCalls++;
                 stats.sortedDrawCalls++;
                 stats.maximumInstancesPerDraw = Math.max(stats.maximumInstancesPerDraw, 1);
             }
         } else {
             for (int batch = 0; batch < plan.batchCount(); batch++) {
-                Entry representative = entries.get(plan.representativeSourceIndices()[batch]);
+                int representative = plan.representativeSourceIndices()[batch];
                 int instanceCount = plan.instanceCounts()[batch];
-                MutableFlushStats stats = mutableFeedback.get(representative.groupOwner);
+                MutableFlushStats stats = mutableFeedback.get(entries.groupOwner(representative));
                 stats.drawCalls++;
                 stats.batchableDrawCalls++;
                 stats.maximumInstancesPerDraw = Math.max(stats.maximumInstancesPerDraw, instanceCount);
@@ -733,7 +799,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             } else {
                 for (int batch = 0; batch < plan.batchCount(); batch++) {
                     int representative = plan.representativeSourceIndices()[batch];
-                    MeshHandle mesh = entries.get(representative).mesh;
+                    MeshHandle mesh = entries.mesh(representative);
                     int firstInstance = plan.firstPackedInstances()[batch];
                     int instanceCount = plan.instanceCounts()[batch];
                     GL30C.glBindVertexArray(mesh.vao);
@@ -777,17 +843,19 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         return feedback;
     }
 
-    private static ArrayList<SortedModelPartQuads.Reference> collectSortedReferences(ArrayList<Entry> entries) {
+    private static ArrayList<SortedModelPartQuads.Reference> collectSortedReferences(
+            QueuedModelPartArena1211<MeshHandle> entries) {
         ArrayList<SortedModelPartQuads.Reference> references = new ArrayList<>();
         long sequence = 0;
         for (int source = 0; source < entries.size(); source++) {
-            Entry entry = entries.get(source);
-            ImmutableModelPartMesh mesh = entry.mesh.source;
+            ImmutableModelPartMesh mesh = entries.mesh(source).source;
+            ImmutableModelPartBonePose pose = entries.pose(source);
+            ImmutableRootRenderTransform root = entries.root(source);
             for (int quad = 0; quad < mesh.quadCount(); quad++) {
                 int firstVertex = Math.multiplyExact(quad, 4);
                 int bone = mesh.vertexFieldBits(firstVertex, ImmutableModelPartMesh.BONE_INDEX);
-                if (!entry.pose.drawVisible(bone)) continue;
-                references.add(SortedModelPartQuads.reference(source, quad, sequence++, mesh, entry.pose, entry.root));
+                if (!pose.drawVisible(bone)) continue;
+                references.add(SortedModelPartQuads.reference(source, quad, sequence++, mesh, pose, root));
             }
         }
         SortedModelPartQuads.sort(references);
@@ -795,12 +863,13 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     }
 
     private void drawSorted(
-            ArrayList<Entry> entries, ArrayList<SortedModelPartQuads.Reference> references, int[] packedIndexBySource) {
+            QueuedModelPartArena1211<MeshHandle> entries,
+            ArrayList<SortedModelPartQuads.Reference> references,
+            int[] packedIndexBySource) {
         int boundVao = -1;
         for (SortedModelPartQuads.Reference reference : references) {
             int source = reference.sourceIndex();
-            Entry entry = entries.get(source);
-            MeshHandle mesh = entry.mesh;
+            MeshHandle mesh = entries.mesh(source);
             if (mesh.vao != boundVao) {
                 GL30C.glBindVertexArray(mesh.vao);
                 boundVao = mesh.vao;
@@ -834,15 +903,21 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         }
     }
 
-    private static void putInstance(ByteBuffer output, Entry entry, int boneBase, int decalBase) {
+    private static void putInstance(
+            ByteBuffer output, QueuedModelPartArena1211<MeshHandle> entries, int index, int boneBase, int decalBase) {
+        ImmutableRootRenderTransform root = entries.root(index);
         for (int element = 0; element < ImmutableRootRenderTransform.POSITION_ELEMENTS; element++) {
-            output.putFloat(Float.intBitsToFloat(entry.root.positionElementBits(element)));
+            output.putFloat(Float.intBitsToFloat(root.positionElementBits(element)));
         }
-        output.putInt(boneBase).putInt(entry.light).putInt(entry.overlay).putInt(decalBase);
-        output.put((byte) (entry.color >>> 16))
-                .put((byte) (entry.color >>> 8))
-                .put((byte) entry.color)
-                .put((byte) (entry.color >>> 24));
+        output.putInt(boneBase)
+                .putInt(entries.light(index))
+                .putInt(entries.overlay(index))
+                .putInt(decalBase);
+        int color = entries.color(index);
+        output.put((byte) (color >>> 16))
+                .put((byte) (color >>> 8))
+                .put((byte) color)
+                .put((byte) (color >>> 24));
         while (output.position() % ModelPartLayouts.INSTANCE_STRIDE != 0) output.put((byte) 0);
     }
 
@@ -939,6 +1014,9 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     }
 
     private void clearQueued() {
+        for (IdentityHashMap<RenderLayer, Batch> providerBatches : queued.values()) {
+            for (Batch batch : providerBatches.values()) releaseBatch(batch);
+        }
         queued.clear();
         queuedInstances = 0;
         orderPlanner.clear();
@@ -966,6 +1044,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         boneStaging = null;
         decalStaging = null;
         instanceStaging = null;
+        recycledBatches.clear();
     }
 
     private void fail() {
@@ -1057,21 +1136,12 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     }
 
     private static final class Batch {
-        private final ArrayList<Entry> entries = new ArrayList<>();
-    }
+        private final QueuedModelPartArena1211<MeshHandle> entries;
 
-    private record Entry(
-            Object groupOwner,
-            MeshHandle mesh,
-            RenderLayer1211Descriptor descriptor,
-            ImmutableModelPartBonePose pose,
-            ImmutableRootRenderTransform root,
-            int light,
-            int overlay,
-            int color,
-            ModelPartDecalTransform1211 decal,
-            long worldGeneration,
-            long resourceGeneration) {}
+        private Batch(int maximumCapacity) {
+            entries = new QueuedModelPartArena1211<>(Math.min(16, maximumCapacity), maximumCapacity);
+        }
+    }
 
     private record MeshHandle(
             int vao, int vbo, int ibo, int indexCount, int boneCount, long bytes, ImmutableModelPartMesh source) {
