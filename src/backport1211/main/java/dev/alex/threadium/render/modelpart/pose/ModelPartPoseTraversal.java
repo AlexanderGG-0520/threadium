@@ -15,14 +15,24 @@ public final class ModelPartPoseTraversal {
             Reader<T> reader,
             ModelPartPoseCapture capture,
             int maximumDepth) {
+        return capture(root, structure, reader, capture, maximumDepth, new Scratch<>());
+    }
+
+    public static <T> ImmutableModelPartBonePose capture(
+            T root,
+            ModelPartStructureSnapshot structure,
+            Reader<T> reader,
+            ModelPartPoseCapture capture,
+            int maximumDepth,
+            Scratch<T> scratch) {
         Objects.requireNonNull(root, "root");
         Objects.requireNonNull(structure, "structure");
         Objects.requireNonNull(reader, "reader");
         Objects.requireNonNull(capture, "capture");
-        IdentityHashMap<T, Boolean> visited = new IdentityHashMap<>();
-        Cursor cursor = new Cursor();
-        visit(root, -1, "root", 0, true, structure, reader, capture, maximumDepth, visited, cursor);
-        if (cursor.nextBone != structure.partCount()) {
+        Scratch<T> state = Objects.requireNonNull(scratch, "scratch");
+        state.reset();
+        visit(root, -1, "root", 0, true, structure, reader, capture, maximumDepth, state.visited, state.cursor);
+        if (state.cursor.nextBone != structure.partCount()) {
             throw new IllegalArgumentException("Pose hierarchy ended before the immutable mesh structure");
         }
         return capture.complete();
@@ -99,6 +109,17 @@ public final class ModelPartPoseTraversal {
                 T part, int boneIndex, boolean treeVisible, boolean drawVisible, ModelPartPoseCapture capture);
 
         void pop();
+    }
+
+    /** Reusable traversal bookkeeping for render-thread-owned pose capture. */
+    public static final class Scratch<T> {
+        private final IdentityHashMap<T, Boolean> visited = new IdentityHashMap<>();
+        private final Cursor cursor = new Cursor();
+
+        private void reset() {
+            visited.clear();
+            cursor.nextBone = 0;
+        }
     }
 
     private static final class Cursor {

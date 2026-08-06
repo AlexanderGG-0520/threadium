@@ -2,6 +2,7 @@ package dev.alex.threadium.render.entity;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.alex.threadium.ThreadiumClient;
+import dev.alex.threadium.compat.IrisCompatibility;
 import dev.alex.threadium.config.ThreadiumConfig;
 import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.mixin.accessor.OutlineVertexConsumerAccessor;
@@ -80,7 +81,9 @@ public final class ModelPartReplacementService {
     }
 
     public static boolean gpuConfigured() {
-        return ThreadiumRuntimeConfig.current().gpuReplacementEnabled() && ModelPartGpuInstanceBackend.configured();
+        return ThreadiumRuntimeConfig.current().gpuReplacementEnabled()
+                && ModelPartGpuInstanceBackend.configured()
+                && IrisCompatibility.replacementAllowed();
     }
 
     public static void beginFrame() {
@@ -98,6 +101,10 @@ public final class ModelPartReplacementService {
         long worlds = current.pendingWorldInvalidations.getAndSet(0);
         long resources = current.pendingResourceInvalidations.getAndSet(0);
         if (worlds != 0 || resources != 0) {
+            if (resources != 0) {
+                IrisCompatibility.refresh();
+                if (!IrisCompatibility.replacementAllowed()) current.runtimeEnabled = false;
+            }
             current.worldGeneration = Math.addExact(current.worldGeneration, worlds);
             current.resourceGeneration = Math.addExact(current.resourceGeneration, resources);
             current.destroyState(false);
@@ -675,8 +682,9 @@ public final class ModelPartReplacementService {
 
     private void applyConfiguration() {
         ThreadiumConfig config = ThreadiumRuntimeConfig.current();
+        IrisCompatibility.refresh();
         appliedConfigurationRevision = ThreadiumRuntimeConfig.revision();
-        runtimeEnabled = config.replacementEnabled();
+        runtimeEnabled = config.replacementEnabled() && IrisCompatibility.replacementAllowed();
         minimumGroupSubmits = config.gpuMinimumGroupSubmits();
         metrics.configure(config.metricsEnabled());
         metricsOutputIntervalNanos = Math.multiplyExact(config.metricsOutputIntervalSeconds(), 1_000_000_000L);

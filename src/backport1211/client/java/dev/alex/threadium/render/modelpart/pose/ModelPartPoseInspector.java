@@ -27,14 +27,17 @@ public final class ModelPartPoseInspector {
     private final ModelPartPoseCache cache =
             new ModelPartPoseCache(MAXIMUM_UNIQUE_POSES_PER_FRAME, MAXIMUM_RETAINED_POSE_BYTES_PER_FRAME);
     private final FrameModelPartPoseArena arena = new FrameModelPartPoseArena(CAPTURE_LIMITS);
+    private final float[] rootPositionScratch = new float[ImmutableRootRenderTransform.POSITION_ELEMENTS];
+    private final float[] rootNormalScratch = new float[ImmutableRootRenderTransform.NORMAL_ELEMENTS];
+    private final MinecraftReader reader = new MinecraftReader();
+    private final ModelPartPoseTraversal.Scratch<ModelPart> traversalScratch = new ModelPartPoseTraversal.Scratch<>();
 
     public ImmutableRootRenderTransform captureRoot(MatrixStack.Entry incomingEntry) {
         Objects.requireNonNull(incomingEntry, "incomingEntry");
-        float[] position = new float[ImmutableRootRenderTransform.POSITION_ELEMENTS];
-        float[] normal = new float[ImmutableRootRenderTransform.NORMAL_ELEMENTS];
-        incomingEntry.getPositionMatrix().get(position);
-        incomingEntry.getNormalMatrix().get(normal);
-        return ImmutableRootRenderTransform.fromFloats(position, normal, requiresNormalization(incomingEntry));
+        incomingEntry.getPositionMatrix().get(rootPositionScratch);
+        incomingEntry.getNormalMatrix().get(rootNormalScratch);
+        return ImmutableRootRenderTransform.fromFloats(
+                rootPositionScratch, rootNormalScratch, requiresNormalization(incomingEntry));
     }
 
     public PoseObservation capturePose(ModelPart root, ImmutableModelPartMesh mesh) {
@@ -42,9 +45,8 @@ public final class ModelPartPoseInspector {
         Objects.requireNonNull(mesh, "mesh");
 
         ModelPartPoseCapture capture = arena.acquire(mesh.partCount());
-        MinecraftReader reader = new MinecraftReader(new MatrixStack());
-        ImmutableModelPartBonePose candidate =
-                ModelPartPoseTraversal.capture(root, mesh.structure(), reader, capture, MAXIMUM_DEPTH);
+        ImmutableModelPartBonePose candidate = ModelPartPoseTraversal.capture(
+                root, mesh.structure(), reader, capture, MAXIMUM_DEPTH, traversalScratch);
         ModelPartPoseCache.InternResult interned = cache.intern(mesh, candidate);
         return new PoseObservation(
                 interned.pose(), interned.hit(), interned.lookupPerformed(), interned.stored(), interned.bypassed());
@@ -84,13 +86,9 @@ public final class ModelPartPoseInspector {
     }
 
     private static final class MinecraftReader implements ModelPartPoseTraversal.Reader<ModelPart> {
-        private final MatrixStack matrices;
+        private final MatrixStack matrices = new MatrixStack();
         private final float[] positionScratch = new float[ImmutableModelPartBonePose.POSITION_ELEMENTS_PER_BONE];
         private final float[] normalScratch = new float[ImmutableModelPartBonePose.NORMAL_ELEMENTS_PER_BONE];
-
-        private MinecraftReader(MatrixStack matrices) {
-            this.matrices = matrices;
-        }
 
         @Override
         public int cuboidCount(ModelPart part) {
