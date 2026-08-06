@@ -1,24 +1,25 @@
-name: CI
+name: Apply high-value 1.21.1 parity fixes
 
 on:
   push:
     branches:
       - mc1.21.1/fabric/dev
-  pull_request:
-    branches:
-      - mc1.21.1/fabric/dev
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
+  apply:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: mc1.21.1/fabric/dev
+          fetch-depth: 0
 
       - name: Set up Java 25
         uses: actions/setup-java@v4
@@ -31,17 +32,542 @@ jobs:
         with:
           gradle-version: "9.6.1"
 
-      - name: Validate Java 21 backport
+      - name: Apply production changes
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              path.write_text(text.replace(old, new, 1))
+
+          iris = Path("src/backport1211/client/java/dev/alex/threadium/compat/IrisCompatibility.java")
+          iris.parent.mkdir(parents=True, exist_ok=True)
+          iris.write_text('''package dev.alex.threadium.compat;
+
+import dev.alex.threadium.ThreadiumClient;
+import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicBoolean;
+import net.fabricmc.loader.api.FabricLoader;
+
+/** Optional, fail-closed Iris shader-pack gate without a hard Iris dependency. */
+public final class IrisCompatibility {
+    private static final String IRIS_API = "net.irisshaders.iris.api.v0.IrisApi";
+    private static final boolean IRIS_LOADED = FabricLoader.getInstance().isModLoaded("iris");
+    private static final AtomicBoolean FAILURE_LOGGED = new AtomicBoolean();
+    private static final Method GET_INSTANCE;
+    private static final Method IS_SHADER_PACK_IN_USE;
+    private static volatile boolean shaderPackInUse;
+
+    static {
+        Method getInstance = null;
+        Method isShaderPackInUse = null;
+        if (IRIS_LOADED) {
+            try {
+                Class<?> api = Class.forName(IRIS_API, false, IrisCompatibility.class.getClassLoader());
+                getInstance = api.getMethod("getInstance");
+                isShaderPackInUse = api.getMethod("isShaderPackInUse");
+            } catch (Throwable failure) {
+                logFailure(failure);
+            }
+        }
+        GET_INSTANCE = getInstance;
+        IS_SHADER_PACK_IN_USE = isShaderPackInUse;
+        shaderPackInUse = queryShaderPackState();
+    }
+
+    private IrisCompatibility() {}
+
+    public static boolean replacementAllowed() {
+        return !shaderPackInUse;
+    }
+
+    /** Re-evaluates Iris state after a client resource reload, including shader-pack changes. */
+    public static void refresh() {
+        shaderPackInUse = queryShaderPackState();
+    }
+
+    static boolean shouldDisable(boolean irisLoaded, boolean apiAvailable, Boolean active) {
+        if (!irisLoaded) return false;
+        if (!apiAvailable) return true;
+        return !Boolean.FALSE.equals(active);
+    }
+
+    private static boolean queryShaderPackState() {
+        if (!IRIS_LOADED) return false;
+        if (GET_INSTANCE == null || IS_SHADER_PACK_IN_USE == null) return true;
+        try {
+            Object api = GET_INSTANCE.invoke(null);
+            Object result = IS_SHADER_PACK_IN_USE.invoke(api);
+            return shouldDisable(true, true, result instanceof Boolean value ? value : null);
+        } catch (Throwable failure) {
+            logFailure(failure);
+            return true;
+        }
+    }
+
+    private static void logFailure(Throwable failure) {
+        if (FAILURE_LOGGED.compareAndSet(false, true)) {
+            ThreadiumClient.LOGGER.error(
+                    "Unable to query Iris shader state; disabling Minecraft 1.21.1 ModelPart replacement for safety",
+                    failure);
+        }
+    }
+}
+''')
+
+          inspector = Path("src/backport1211/client/java/dev/alex/threadium/render/modelpart/pose/ModelPartPoseInspector.java")
+          inspector.write_text('''package dev.alex.threadium.render.modelpart.pose;
+
+import dev.alex.threadium.mixin.accessor.MatrixStackEntryAccessor;
+import dev.alex.threadium.mixin.accessor.ModelPartAccessor;
+import dev.alex.threadium.render.modelpart.structure.ImmutableModelPartMesh;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import net.minecraft.client.model.ModelPart;
+import net.minecraft.client.util.math.MatrixStack;
+
+/** Render-thread adapter for exact local-to-root bone pose and incoming root-transform capture. */
+public final class ModelPartPoseInspector {
+    private static final int MAXIMUM_DEPTH = 128;
+    private static final int MAXIMUM_BONES = 1_024;
+    private static final long MAXIMUM_MATRIX_ELEMENTS = (long) MAXIMUM_BONES
+            * (ImmutableModelPartBonePose.POSITION_ELEMENTS_PER_BONE
+                    + ImmutableModelPartBonePose.NORMAL_ELEMENTS_PER_BONE);
+    private static final int MAXIMUM_VISIBILITY_WORDS = (MAXIMUM_BONES + 63) / 64;
+    private static final long MAXIMUM_POSE_BYTES = 128L * 1024;
+    private static final int MAXIMUM_UNIQUE_POSES_PER_FRAME = 1_024;
+    private static final long MAXIMUM_RETAINED_POSE_BYTES_PER_FRAME = 64L * 1024 * 1024;
+
+    private static final ModelPartPoseCapture.Limits CAPTURE_LIMITS = new ModelPartPoseCapture.Limits(
+            MAXIMUM_BONES, MAXIMUM_MATRIX_ELEMENTS, MAXIMUM_VISIBILITY_WORDS, MAXIMUM_POSE_BYTES);
+
+    private final ModelPartPoseCache cache =
+            new ModelPartPoseCache(MAXIMUM_UNIQUE_POSES_PER_FRAME, MAXIMUM_RETAINED_POSE_BYTES_PER_FRAME);
+    private final FrameModelPartPoseArena arena = new FrameModelPartPoseArena(CAPTURE_LIMITS);
+    private final float[] rootPositionScratch = new float[ImmutableRootRenderTransform.POSITION_ELEMENTS];
+    private final float[] rootNormalScratch = new float[ImmutableRootRenderTransform.NORMAL_ELEMENTS];
+    private final MinecraftReader reader = new MinecraftReader();
+    private final ModelPartPoseTraversal.Scratch<ModelPart> traversalScratch = new ModelPartPoseTraversal.Scratch<>();
+
+    public ImmutableRootRenderTransform captureRoot(MatrixStack.Entry incomingEntry) {
+        Objects.requireNonNull(incomingEntry, "incomingEntry");
+        incomingEntry.getPositionMatrix().get(rootPositionScratch);
+        incomingEntry.getNormalMatrix().get(rootNormalScratch);
+        return ImmutableRootRenderTransform.fromFloats(
+                rootPositionScratch, rootNormalScratch, requiresNormalization(incomingEntry));
+    }
+
+    public PoseObservation capturePose(ModelPart root, ImmutableModelPartMesh mesh) {
+        Objects.requireNonNull(root, "root");
+        Objects.requireNonNull(mesh, "mesh");
+
+        ModelPartPoseCapture capture = arena.acquire(mesh.partCount());
+        ImmutableModelPartBonePose candidate = ModelPartPoseTraversal.capture(
+                root, mesh.structure(), reader, capture, MAXIMUM_DEPTH, traversalScratch);
+        ModelPartPoseCache.InternResult interned = cache.intern(mesh, candidate);
+        return new PoseObservation(
+                interned.pose(), interned.hit(), interned.lookupPerformed(), interned.stored(), interned.bypassed());
+    }
+
+    public int uniquePoseCount() {
+        return cache.uniquePoseCount();
+    }
+
+    public long retainedPoseBytes() {
+        return cache.retainedBytes();
+    }
+
+    public void beginFrame() {
+        cache.clear();
+        arena.beginFrame();
+    }
+
+    public void clear() {
+        cache.clear();
+        arena.clear();
+    }
+
+    private static boolean requiresNormalization(MatrixStack.Entry entry) {
+        return !((MatrixStackEntryAccessor) (Object) entry).threadium$canSkipNormalization();
+    }
+
+    public record PoseObservation(
+            ImmutableModelPartBonePose pose,
+            boolean poseCacheHit,
+            boolean lookupPerformed,
+            boolean stored,
+            boolean directPacked) {
+        public PoseObservation(ImmutableModelPartBonePose pose, boolean poseCacheHit) {
+            this(pose, poseCacheHit, true, !poseCacheHit, false);
+        }
+    }
+
+    private static final class MinecraftReader implements ModelPartPoseTraversal.Reader<ModelPart> {
+        private final MatrixStack matrices = new MatrixStack();
+        private final float[] positionScratch = new float[ImmutableModelPartBonePose.POSITION_ELEMENTS_PER_BONE];
+        private final float[] normalScratch = new float[ImmutableModelPartBonePose.NORMAL_ELEMENTS_PER_BONE];
+
+        @Override
+        public int cuboidCount(ModelPart part) {
+            return cuboids(part).size();
+        }
+
+        @Override
+        public Map<String, ModelPart> children(ModelPart part) {
+            return Objects.requireNonNull(((ModelPartAccessor) (Object) part).threadium$getChildren(), "children");
+        }
+
+        @Override
+        public boolean visible(ModelPart part) {
+            return part.visible;
+        }
+
+        @Override
+        public boolean hidden(ModelPart part) {
+            return part.hidden;
+        }
+
+        @Override
+        public void push() {
+            matrices.push();
+        }
+
+        @Override
+        public void applyTransform(ModelPart part) {
+            part.rotate(matrices);
+        }
+
+        @Override
+        public void captureMatrices(
+                ModelPart part, int boneIndex, boolean treeVisible, boolean drawVisible, ModelPartPoseCapture capture) {
+            MatrixStack.Entry entry = matrices.peek();
+            entry.getPositionMatrix().get(positionScratch);
+            entry.getNormalMatrix().get(normalScratch);
+            capture.captureBone(
+                    boneIndex, positionScratch, normalScratch, treeVisible, drawVisible, requiresNormalization(entry));
+        }
+
+        @Override
+        public void pop() {
+            matrices.pop();
+        }
+
+        private static List<ModelPart.Cuboid> cuboids(ModelPart part) {
+            return Objects.requireNonNull(((ModelPartAccessor) (Object) part).threadium$getCuboids(), "cuboids");
+        }
+    }
+}
+''')
+
+          traversal = Path("src/backport1211/main/java/dev/alex/threadium/render/modelpart/pose/ModelPartPoseTraversal.java")
+          traversal.write_text('''package dev.alex.threadium.render.modelpart.pose;
+
+import dev.alex.threadium.render.modelpart.structure.ModelPartStructureSnapshot;
+import java.util.IdentityHashMap;
+import java.util.Map;
+import java.util.Objects;
+
+/** Shared deterministic pre-order traversal that validates pose indices against the immutable M1 structure. */
+public final class ModelPartPoseTraversal {
+    private ModelPartPoseTraversal() {}
+
+    public static <T> ImmutableModelPartBonePose capture(
+            T root,
+            ModelPartStructureSnapshot structure,
+            Reader<T> reader,
+            ModelPartPoseCapture capture,
+            int maximumDepth) {
+        return capture(root, structure, reader, capture, maximumDepth, new Scratch<>());
+    }
+
+    public static <T> ImmutableModelPartBonePose capture(
+            T root,
+            ModelPartStructureSnapshot structure,
+            Reader<T> reader,
+            ModelPartPoseCapture capture,
+            int maximumDepth,
+            Scratch<T> scratch) {
+        Objects.requireNonNull(root, "root");
+        Objects.requireNonNull(structure, "structure");
+        Objects.requireNonNull(reader, "reader");
+        Objects.requireNonNull(capture, "capture");
+        Scratch<T> state = Objects.requireNonNull(scratch, "scratch");
+        state.reset();
+        visit(
+                root,
+                -1,
+                "root",
+                0,
+                true,
+                structure,
+                reader,
+                capture,
+                maximumDepth,
+                state.visited,
+                state.cursor);
+        if (state.cursor.nextBone != structure.partCount()) {
+            throw new IllegalArgumentException("Pose hierarchy ended before the immutable mesh structure");
+        }
+        return capture.complete();
+    }
+
+    private static <T> void visit(
+            T part,
+            int parentIndex,
+            String childName,
+            int depth,
+            boolean parentTreeVisible,
+            ModelPartStructureSnapshot structure,
+            Reader<T> reader,
+            ModelPartPoseCapture capture,
+            int maximumDepth,
+            IdentityHashMap<T, Boolean> visited,
+            Cursor cursor) {
+        if (depth > maximumDepth || cursor.nextBone >= structure.partCount()) {
+            throw new ModelPartPoseCapacityException("ModelPart pose hierarchy limit exceeded");
+        }
+        if (visited.put(part, Boolean.TRUE) != null) {
+            throw new IllegalArgumentException("ModelPart pose hierarchy is cyclic or shares a child instance");
+        }
+
+        int boneIndex = cursor.nextBone++;
+        ModelPartStructureSnapshot.Node expected = structure.nodes().get(boneIndex);
+        if (expected.index() != boneIndex
+                || expected.parentIndex() != parentIndex
+                || !expected.childName().equals(childName)
+                || expected.cuboidCount() != reader.cuboidCount(part)) {
+            throw new IllegalArgumentException("ModelPart pose hierarchy no longer matches its immutable mesh");
+        }
+
+        reader.push();
+        try {
+            reader.applyTransform(part);
+            boolean treeVisible = parentTreeVisible && reader.visible(part);
+            boolean drawVisible = treeVisible && !reader.hidden(part);
+            reader.captureMatrices(part, boneIndex, treeVisible, drawVisible, capture);
+            for (Map.Entry<String, T> child :
+                    Objects.requireNonNull(reader.children(part), "children").entrySet()) {
+                visit(
+                        Objects.requireNonNull(child.getValue(), "child"),
+                        boneIndex,
+                        Objects.requireNonNull(child.getKey(), "child name"),
+                        depth + 1,
+                        treeVisible,
+                        structure,
+                        reader,
+                        capture,
+                        maximumDepth,
+                        visited,
+                        cursor);
+            }
+        } finally {
+            reader.pop();
+        }
+    }
+
+    public interface Reader<T> {
+        int cuboidCount(T part);
+
+        Map<String, T> children(T part);
+
+        boolean visible(T part);
+
+        boolean hidden(T part);
+
+        void push();
+
+        void applyTransform(T part);
+
+        void captureMatrices(
+                T part, int boneIndex, boolean treeVisible, boolean drawVisible, ModelPartPoseCapture capture);
+
+        void pop();
+    }
+
+    /** Reusable traversal bookkeeping for render-thread-owned pose capture. */
+    public static final class Scratch<T> {
+        private final IdentityHashMap<T, Boolean> visited = new IdentityHashMap<>();
+        private final Cursor cursor = new Cursor();
+
+        private void reset() {
+            visited.clear();
+            cursor.nextBone = 0;
+        }
+    }
+
+    private static final class Cursor {
+        private int nextBone;
+    }
+}
+''')
+
+          service = Path("src/backport1211/client/java/dev/alex/threadium/render/entity/ModelPartReplacementService.java")
+          replace_once(
+              service,
+              "import dev.alex.threadium.ThreadiumClient;\nimport dev.alex.threadium.config.ThreadiumConfig;",
+              "import dev.alex.threadium.ThreadiumClient;\nimport dev.alex.threadium.compat.IrisCompatibility;\nimport dev.alex.threadium.config.ThreadiumConfig;")
+          replace_once(
+              service,
+              "return ThreadiumRuntimeConfig.current().gpuReplacementEnabled() && ModelPartGpuInstanceBackend.configured();",
+              "return ThreadiumRuntimeConfig.current().gpuReplacementEnabled()\n                && ModelPartGpuInstanceBackend.configured()\n                && IrisCompatibility.replacementAllowed();")
+          replace_once(
+              service,
+              "if (worlds != 0 || resources != 0) {\n            current.worldGeneration = Math.addExact(current.worldGeneration, worlds);",
+              "if (worlds != 0 || resources != 0) {\n            if (resources != 0) {\n                IrisCompatibility.refresh();\n                if (!IrisCompatibility.replacementAllowed()) current.runtimeEnabled = false;\n            }\n            current.worldGeneration = Math.addExact(current.worldGeneration, worlds);")
+          replace_once(
+              service,
+              "ThreadiumConfig config = ThreadiumRuntimeConfig.current();\n        appliedConfigurationRevision = ThreadiumRuntimeConfig.revision();\n        runtimeEnabled = config.replacementEnabled();",
+              "ThreadiumConfig config = ThreadiumRuntimeConfig.current();\n        IrisCompatibility.refresh();\n        appliedConfigurationRevision = ThreadiumRuntimeConfig.revision();\n        runtimeEnabled = config.replacementEnabled() && IrisCompatibility.replacementAllowed();")
+
+          iris_test = Path("src/backport1211/test/java/dev/alex/threadium/compat/IrisCompatibilityTest.java")
+          iris_test.parent.mkdir(parents=True, exist_ok=True)
+          iris_test.write_text('''package dev.alex.threadium.compat;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.junit.jupiter.api.Test;
+
+class IrisCompatibilityTest {
+    @Test
+    void allowsReplacementWhenIrisIsAbsentOrInactive() {
+        assertFalse(IrisCompatibility.shouldDisable(false, false, null));
+        assertFalse(IrisCompatibility.shouldDisable(true, true, false));
+    }
+
+    @Test
+    void failsClosedForActiveUnknownOrMalformedIrisState() {
+        assertTrue(IrisCompatibility.shouldDisable(true, true, true));
+        assertTrue(IrisCompatibility.shouldDisable(true, false, null));
+        assertTrue(IrisCompatibility.shouldDisable(true, true, null));
+    }
+}
+''')
+
+          hot_path_test = Path(
+              "src/backport1211/test/java/dev/alex/threadium/render/modelpart/pose/ModelPartPoseHotPath1211Test.java")
+          hot_path_test.parent.mkdir(parents=True, exist_ok=True)
+          hot_path_test.write_text('''package dev.alex.threadium.render.modelpart.pose;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import org.junit.jupiter.api.Test;
+
+class ModelPartPoseHotPath1211Test {
+    private static final Path CLIENT = Path.of("src", "backport1211", "client", "java");
+    private static final Path MAIN = Path.of("src", "backport1211", "main", "java");
+
+    @Test
+    void poseInspectorReusesRenderThreadScratch() throws IOException {
+        String inspector = Files.readString(CLIENT.resolve(Path.of(
+                "dev", "alex", "threadium", "render", "modelpart", "pose", "ModelPartPoseInspector.java")));
+
+        assertTrue(inspector.contains("private final float[] rootPositionScratch"));
+        assertTrue(inspector.contains("private final MinecraftReader reader = new MinecraftReader();"));
+        assertTrue(inspector.contains("private final ModelPartPoseTraversal.Scratch<ModelPart> traversalScratch"));
+        assertFalse(inspector.contains("float[] position = new float[ImmutableRootRenderTransform.POSITION_ELEMENTS]"));
+        assertFalse(inspector.contains("MinecraftReader reader = new MinecraftReader(new MatrixStack())"));
+    }
+
+    @Test
+    void traversalSupportsReusableIdentityBookkeeping() throws IOException {
+        String traversal = Files.readString(MAIN.resolve(Path.of(
+                "dev", "alex", "threadium", "render", "modelpart", "pose", "ModelPartPoseTraversal.java")));
+
+        assertTrue(traversal.contains("public static final class Scratch<T>"));
+        assertTrue(traversal.contains("state.reset();"));
+        assertTrue(traversal.contains("visited.clear();"));
+        assertTrue(traversal.contains("cursor.nextBone = 0;"));
+    }
+
+    @Test
+    void replacementServiceUsesFailClosedIrisGate() throws IOException {
+        String service = Files.readString(CLIENT.resolve(Path.of(
+                "dev", "alex", "threadium", "render", "entity", "ModelPartReplacementService.java")));
+
+        assertTrue(service.contains("IrisCompatibility.replacementAllowed()"));
+        assertTrue(service.contains("IrisCompatibility.refresh();"));
+        assertTrue(service.contains("runtimeEnabled = config.replacementEnabled() && IrisCompatibility.replacementAllowed();"));
+    }
+}
+''')
+          PY
+
+      - name: Validate implementation
         run: gradle --no-daemon clean spotlessApply spotlessCheck test build
 
-      - name: Upload validation reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mc1211-validation-${{ github.sha }}
-          if-no-files-found: warn
-          retention-days: 3
-          path: |
-            build/reports
-            build/test-results
-            build/libs
+      - name: Restore normal CI and publish
+        shell: bash
+        run: |
+          cat > .github/workflows/ci.yml <<'YAML'
+          name: CI
+
+          on:
+            push:
+              branches:
+                - mc1.21.1/fabric/dev
+            pull_request:
+              branches:
+                - mc1.21.1/fabric/dev
+            workflow_dispatch:
+
+          permissions:
+            contents: read
+
+          jobs:
+            build:
+              runs-on: ubuntu-latest
+              timeout-minutes: 30
+              steps:
+                - name: Check out repository
+                  uses: actions/checkout@v4
+
+                - name: Set up Java 25
+                  uses: actions/setup-java@v4
+                  with:
+                    distribution: zulu
+                    java-version: "25"
+
+                - name: Set up Gradle 9.6.1
+                  uses: gradle/actions/setup-gradle@v4
+                  with:
+                    gradle-version: "9.6.1"
+
+                - name: Validate Java 21 backport
+                  run: gradle --no-daemon clean spotlessApply spotlessCheck test build
+
+                - name: Upload validation reports
+                  if: always()
+                  uses: actions/upload-artifact@v4
+                  with:
+                    name: mc1211-validation-${{ github.sha }}
+                    if-no-files-found: warn
+                    retention-days: 3
+                    path: |
+                      build/reports
+                      build/test-results
+                      build/libs
+          YAML
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            .github/workflows/ci.yml \
+            src/backport1211/client/java/dev/alex/threadium/compat/IrisCompatibility.java \
+            src/backport1211/client/java/dev/alex/threadium/render/entity/ModelPartReplacementService.java \
+            src/backport1211/client/java/dev/alex/threadium/render/modelpart/pose/ModelPartPoseInspector.java \
+            src/backport1211/main/java/dev/alex/threadium/render/modelpart/pose/ModelPartPoseTraversal.java \
+            src/backport1211/test/java/dev/alex/threadium/compat/IrisCompatibilityTest.java \
+            src/backport1211/test/java/dev/alex/threadium/render/modelpart/pose/ModelPartPoseHotPath1211Test.java
+          git diff --cached --check
+          git commit -m "Apply high-value 1.21.1 parity fixes"
+          git push origin HEAD:mc1.21.1/fabric/dev
