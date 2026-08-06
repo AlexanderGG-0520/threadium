@@ -1,5 +1,7 @@
 package dev.alex.threadium;
 
+import dev.alex.threadium.benchmark.PipelineDifferentialRunner1211;
+import dev.alex.threadium.benchmark.ThreadiumValidationCommands1211;
 import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.render.entity.ModelPartReplacementService;
 import dev.alex.threadium.render.entity.PassThroughEntityRenderService;
@@ -24,6 +26,7 @@ public final class ThreadiumClient implements ClientModInitializer {
         ThreadiumRuntimeConfig.initialize();
         PassThroughEntityRenderService.initialize();
         ModelPartReplacementService.initialize();
+        ThreadiumValidationCommands1211.register();
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> invalidateWorld());
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> invalidateWorld());
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
@@ -39,6 +42,7 @@ public final class ThreadiumClient implements ClientModInitializer {
     }
 
     private static void invalidateWorld() {
+        PipelineDifferentialRunner1211.invalidate("world lifecycle changed");
         ModelPartReplacementService.invalidateWorld();
         PassThroughEntityRenderService.invalidateWorld();
     }
@@ -53,6 +57,7 @@ public final class ThreadiumClient implements ClientModInitializer {
 
         @Override
         public void reload(ResourceManager manager) {
+            PipelineDifferentialRunner1211.invalidate("resource reload");
             ModelPartReplacementService.invalidateResources();
             PassThroughEntityRenderService.invalidateResources();
         }

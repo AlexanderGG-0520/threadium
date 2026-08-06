@@ -2,6 +2,7 @@ package dev.alex.threadium.mixin;
 
 import dev.alex.threadium.render.entity.ModelPartReplacementService;
 import dev.alex.threadium.render.entity.PassThroughEntityRenderService;
+import dev.alex.threadium.render.modelpart.DifferentialExecutionScope;
 import net.minecraft.client.model.ModelPart;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.util.math.MatrixStack;
@@ -27,9 +28,9 @@ abstract class ModelPartMixin {
             int color,
             CallbackInfo callbackInfo) {
         ModelPart root = (ModelPart) (Object) this;
-        if (ModelPartReplacementService.beginModelPartRender(
-                root, matrices, vertexConsumer, light, overlay, color)) {
+        if (ModelPartReplacementService.beginModelPartRender(root, matrices, vertexConsumer, light, overlay, color)) {
             ModelPartReplacementService.endModelPartRender();
+            DifferentialExecutionScope.suppression();
             callbackInfo.cancel();
             return;
         }
