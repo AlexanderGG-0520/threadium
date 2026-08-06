@@ -2,6 +2,7 @@ package dev.alex.threadium;
 
 import dev.alex.threadium.benchmark.PipelineDifferentialRunner1211;
 import dev.alex.threadium.benchmark.ThreadiumValidationCommands1211;
+import dev.alex.threadium.compat.ImmediatelyFastCompatibility;
 import dev.alex.threadium.config.ThreadiumRuntimeConfig;
 import dev.alex.threadium.render.entity.ModelPartReplacementService;
 import dev.alex.threadium.render.entity.PassThroughEntityRenderService;
@@ -24,6 +25,7 @@ public final class ThreadiumClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         ThreadiumRuntimeConfig.initialize();
+        ImmediatelyFastCompatibility.logStatus();
         PassThroughEntityRenderService.initialize();
         ModelPartReplacementService.initialize();
         ThreadiumValidationCommands1211.register();

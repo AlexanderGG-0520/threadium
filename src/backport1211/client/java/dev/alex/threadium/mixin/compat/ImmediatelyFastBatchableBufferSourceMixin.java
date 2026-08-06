@@ -1,5 +1,6 @@
 package dev.alex.threadium.mixin.compat;
 
+import dev.alex.threadium.compat.ImmediatelyFastCompatibility;
 import dev.alex.threadium.render.entity.ModelPartReplacementService;
 import dev.alex.threadium.render.entity.PassThroughEntityRenderService;
 import dev.alex.threadium.render.modelpart.material.MaterialProviderSource;
@@ -15,7 +16,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * Observes ImmediatelyFast's returned consumer without wrapping it, mutating it, or changing control flow.
  *
  * <p>The target is optional. When ImmediatelyFast is absent this pseudo mixin is ignored, preserving the standalone
- * Threadium dependency boundary.
+ * Threadium dependency boundary. When an unverified ImmediatelyFast version is present, the injected callback is a
+ * no-op and Threadium keeps its normal fail-closed fallback behavior.
  */
 @Pseudo
 @Mixin(targets = "net.raphimc.immediatelyfast.feature.batching.BatchableBufferSource", remap = false)
@@ -23,6 +25,7 @@ abstract class ImmediatelyFastBatchableBufferSourceMixin {
     @Inject(method = "getBuffer", at = @At("RETURN"), require = 0, remap = false)
     private void threadium$observeReturnedConsumer(
             RenderLayer layer, CallbackInfoReturnable<VertexConsumer> callbackInfo) {
+        if (!ImmediatelyFastCompatibility.observationSupported()) return;
         VertexConsumer consumer = callbackInfo.getReturnValue();
         PassThroughEntityRenderService.observeMaterialProviderRequest(
                 MaterialProviderSource.IMMEDIATELY_FAST, this, layer, consumer);
