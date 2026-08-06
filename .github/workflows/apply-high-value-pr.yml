@@ -1,0 +1,119 @@
+name: Trigger high-value 1.21.1 parity validation
+
+on:
+  pull_request:
+    branches:
+      - mc1.21.1/fabric/dev
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out target branch
+        uses: actions/checkout@v4
+        with:
+          ref: mc1.21.1/fabric/dev
+          fetch-depth: 0
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "25"
+
+      - name: Set up Gradle 9.6.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.1"
+
+      - name: Extract and apply production patch
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/ci.yml').read_text()
+          start_marker = "          python <<'PY'\n"
+          end_marker = "\n          PY\n\n      - name: Validate implementation"
+          start = workflow.index(start_marker) + len(start_marker)
+          end = workflow.index(end_marker, start)
+          lines = workflow[start:end].splitlines()
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
+          Path('/tmp/apply_high_value.py').write_text(script)
+          PY
+          python /tmp/apply_high_value.py
+
+      - name: Validate implementation
+        run: gradle --no-daemon clean spotlessApply spotlessCheck test build
+
+      - name: Restore normal CI and publish
+        shell: bash
+        run: |
+          cat > .github/workflows/ci.yml <<'YAML'
+          name: CI
+
+          on:
+            push:
+              branches:
+                - mc1.21.1/fabric/dev
+            pull_request:
+              branches:
+                - mc1.21.1/fabric/dev
+            workflow_dispatch:
+
+          permissions:
+            contents: read
+
+          jobs:
+            build:
+              runs-on: ubuntu-latest
+              timeout-minutes: 30
+              steps:
+                - name: Check out repository
+                  uses: actions/checkout@v4
+
+                - name: Set up Java 25
+                  uses: actions/setup-java@v4
+                  with:
+                    distribution: zulu
+                    java-version: "25"
+
+                - name: Set up Gradle 9.6.1
+                  uses: gradle/actions/setup-gradle@v4
+                  with:
+                    gradle-version: "9.6.1"
+
+                - name: Validate Java 21 backport
+                  run: gradle --no-daemon clean spotlessApply spotlessCheck test build
+
+                - name: Upload validation reports
+                  if: always()
+                  uses: actions/upload-artifact@v4
+                  with:
+                    name: mc1211-validation-${{ github.sha }}
+                    if-no-files-found: warn
+                    retention-days: 3
+                    path: |
+                      build/reports
+                      build/test-results
+                      build/libs
+          YAML
+          rm .github/workflows/apply-high-value-pr.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A \
+            .github/workflows \
+            src/backport1211/client/java/dev/alex/threadium/compat \
+            src/backport1211/client/java/dev/alex/threadium/render/entity/ModelPartReplacementService.java \
+            src/backport1211/client/java/dev/alex/threadium/render/modelpart/pose/ModelPartPoseInspector.java \
+            src/backport1211/main/java/dev/alex/threadium/render/modelpart/pose/ModelPartPoseTraversal.java \
+            src/backport1211/test/java/dev/alex/threadium/compat \
+            src/backport1211/test/java/dev/alex/threadium/render/modelpart/pose
+          git diff --cached --check
+          git commit -m "Apply high-value 1.21.1 parity fixes"
+          git push origin HEAD:mc1.21.1/fabric/dev
