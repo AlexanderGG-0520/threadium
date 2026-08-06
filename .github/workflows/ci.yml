@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - mc1.21.1/fabric/dev
+  pull_request:
+    branches:
+      - mc1.21.1/fabric/dev
   workflow_dispatch:
 
 permissions:
