@@ -20,7 +20,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * no-op and Threadium keeps its normal fail-closed fallback behavior.
  */
 @Pseudo
-@Mixin(targets = "net.raphimc.immediatelyfast.feature.core.BatchableBufferSource", remap = false)
+@Mixin(targets = ImmediatelyFastCompatibility.BATCHABLE_BUFFER_SOURCE_CLASS, remap = false)
 abstract class ImmediatelyFastBatchableBufferSourceMixin {
     @Inject(method = "getBuffer", at = @At("RETURN"), require = 0, remap = false)
     private void threadium$observeReturnedConsumer(
