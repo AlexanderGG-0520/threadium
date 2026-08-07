@@ -27,16 +27,16 @@ import org.lwjgl.opengl.GL15C;
 import org.lwjgl.opengl.GL20C;
 import org.lwjgl.opengl.GL30C;
 import org.lwjgl.opengl.GL31C;
-import org.lwjgl.opengl.GL33C;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 
 /**
- * Minecraft 1.21.1 OpenGL 3.3 ModelPart backend.
+ * Minecraft 1.21.1 OpenGL 3.2+ ModelPart backend.
  *
  * <p>Immutable structural meshes are uploaded once. A provider-layer flush uploads one exact frame-local bone palette
- * and one packed instance stream, then submits compatible meshes through {@code glDrawElementsInstanced}. No expanded
- * entity vertex stream is built on the GPU path.
+ * and one packed instance stream, then submits compatible meshes through {@code glDrawElementsInstanced}. Instanced
+ * attribute divisors use OpenGL 3.3 when available and safely fall back to {@code GL_ARB_instanced_arrays} on the
+ * OpenGL 3.2 contexts commonly created by Minecraft 1.21.1.
  */
 public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     private final ModelPart1211Metrics metrics;
@@ -48,6 +48,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
     private final IdentityHashMap<Object, IdentityHashMap<RenderLayer, Batch>> queued = new IdentityHashMap<>();
     private final ArrayDeque<Batch> recycledBatches = new ArrayDeque<>();
     private final InstanceSubmissionOrderPlanner orderPlanner = new InstanceSubmissionOrderPlanner();
+    private GlInstancing1211.DivisorApi instancedAttributeDivisorApi = GlInstancing1211.DivisorApi.UNAVAILABLE;
     private int program;
     private int boneBuffer;
     private int boneTexture;
@@ -502,6 +503,11 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         states.transition(ModelPartBackendState.UNINITIALIZED, ModelPartBackendState.INITIALIZING);
         metrics.recordInitializationAttempt();
         try {
+            instancedAttributeDivisorApi = GlInstancing1211.detectCurrent();
+            if (instancedAttributeDivisorApi == GlInstancing1211.DivisorApi.UNAVAILABLE) {
+                throw new IllegalStateException(
+                        "Threadium GPU instancing requires OpenGL 3.3 or GL_ARB_instanced_arrays");
+            }
             program = link(
                     read("/assets/threadium/shaders/modelpart_gl33_1211.vert"),
                     read("/assets/threadium/shaders/modelpart_gl33_1211.frag"));
@@ -594,7 +600,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, instanceBuffer);
             for (int location = 4; location <= 12; location++) {
                 GL20C.glEnableVertexAttribArray(location);
-                GL33C.glVertexAttribDivisor(location, 1);
+                GlInstancing1211.vertexAttribDivisor(instancedAttributeDivisorApi, location, 1);
             }
             GL30C.glBindVertexArray(0);
             GL15C.glBindBuffer(GL15C.GL_ARRAY_BUFFER, 0);
@@ -1044,6 +1050,7 @@ public final class ModelPartGpuInstanceBackend implements AutoCloseable {
         boneStaging = null;
         decalStaging = null;
         instanceStaging = null;
+        instancedAttributeDivisorApi = GlInstancing1211.DivisorApi.UNAVAILABLE;
         recycledBatches.clear();
     }
 
