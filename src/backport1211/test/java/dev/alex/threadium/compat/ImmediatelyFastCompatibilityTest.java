@@ -1,5 +1,6 @@
 package dev.alex.threadium.compat;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -13,6 +14,13 @@ class ImmediatelyFastCompatibilityTest {
         assertFalse(ImmediatelyFastCompatibility.isVerifiedVersion("1.6.10+1.21.1"));
         assertFalse(ImmediatelyFastCompatibility.isVerifiedVersion("1.6.11+1.21.4"));
         assertFalse(ImmediatelyFastCompatibility.isVerifiedVersion(null));
+    }
+
+    @Test
+    void pinsAuditedBatchableBufferSourceClass() {
+        assertEquals(
+                "net.raphimc.immediatelyfast.feature.core.BatchableBufferSource",
+                ImmediatelyFastCompatibility.BATCHABLE_BUFFER_SOURCE_CLASS);
     }
 
     @Test
