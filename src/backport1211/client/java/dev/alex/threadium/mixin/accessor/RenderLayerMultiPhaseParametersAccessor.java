@@ -1,6 +1,7 @@
 package dev.alex.threadium.mixin.accessor;
 
 import com.google.common.collect.ImmutableList;
+import net.minecraft.client.render.RenderPhase;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
@@ -11,5 +12,5 @@ public interface RenderLayerMultiPhaseParametersAccessor {
     ImmutableList<?> threadium$getPhaseList();
 
     @Accessor("texture")
-    Object threadium$getTexturePhase();
+    RenderPhase.TextureBase threadium$getTexturePhase();
 }

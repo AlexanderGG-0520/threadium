@@ -22,6 +22,7 @@ repositories {
 }
 
 loom {
+    accessWidenerPath = file('src/backport1211/client/resources/threadium.accesswidener')
     splitEnvironmentSourceSets()
     runs {
         client {

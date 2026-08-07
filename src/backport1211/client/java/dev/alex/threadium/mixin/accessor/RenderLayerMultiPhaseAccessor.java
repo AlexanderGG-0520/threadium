@@ -1,11 +1,12 @@
 package dev.alex.threadium.mixin.accessor;
 
+import net.minecraft.client.render.RenderLayer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
-/** Exposes the private 1.21.1 MultiPhase parameter object without naming its protected type. */
+/** Exposes the exact 1.21.1 MultiPhase parameter object. */
 @Mixin(targets = "net.minecraft.client.render.RenderLayer$MultiPhase")
 public interface RenderLayerMultiPhaseAccessor {
     @Accessor("phases")
-    Object threadium$getPhases();
+    RenderLayer.MultiPhaseParameters threadium$getPhases();
 }

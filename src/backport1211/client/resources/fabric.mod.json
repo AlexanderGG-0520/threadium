@@ -15,6 +15,7 @@
   "license": "MIT",
   "icon": "assets/threadium/icon.png",
   "environment": "client",
+  "accessWidener": "threadium.accesswidener",
   "entrypoints": {
     "client": [
       "dev.alex.threadium.ThreadiumClient"
