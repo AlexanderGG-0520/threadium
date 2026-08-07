@@ -13,6 +13,9 @@ import net.fabricmc.loader.api.FabricLoader;
  * versions remain untouched and use Threadium's normal fail-closed material resolution and vanilla fallback paths.
  */
 public final class ImmediatelyFastCompatibility {
+    public static final String BATCHABLE_BUFFER_SOURCE_CLASS =
+            "net.raphimc.immediatelyfast.feature.core.BatchableBufferSource";
+
     private static final String MOD_ID = "immediatelyfast";
     private static final String VERIFIED_VERSION_PREFIX = "1.6.11+1.21.1";
     private static final RuntimeState RUNTIME = detectRuntime();
