@@ -32,9 +32,9 @@ class PreparedModelPartReplayTest {
     }
 
     @Test
-    void requestedNormalNormalizationIsApplied() {
+    void normalizationFlagDoesNotAlterMinecraft1201NormalEmission() {
         PreparedModelPartReplay replay = PreparedModelPartReplay.prepare(invocation(true, 0.0F, 0.0F, true));
-        assertEquals(1.0F, replay.field(0, PreparedModelPartReplay.NORMAL_Z), 0.00001F);
+        assertEquals(2.0F, replay.field(0, PreparedModelPartReplay.NORMAL_Z), 0.00001F);
     }
 
     @Test

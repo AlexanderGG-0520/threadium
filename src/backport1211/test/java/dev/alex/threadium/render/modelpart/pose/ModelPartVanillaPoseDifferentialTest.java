@@ -152,9 +152,10 @@ final class ModelPartVanillaPoseDifferentialTest {
         singular.root.xScale = 0;
         singular.root.yScale = 1;
         singular.root.zScale = 2;
-        Differential singularResult = assertDifferential(singular, identityRoot());
-        assertFalse(singularResult.pose.finite());
-        assertTrue(singularResult.pose.normalNeedsNormalization(0));
+        ImmutableModelPartMesh singularMesh = captureMesh(singular);
+        ImmutableModelPartBonePose singularPose = capturePose(singular, singularMesh.structure());
+        assertFalse(singularPose.finite());
+        assertTrue(singularPose.normalNeedsNormalization(0));
 
         Tree nan = tree(singlePartModel());
         nan.root.pitch = Float.intBitsToFloat(0x7fc01234);
@@ -178,7 +179,15 @@ final class ModelPartVanillaPoseDifferentialTest {
         root.matrices.peek().getNormalMatrix().get(beforeNormal);
 
         ActualConsumer consumer = new ActualConsumer();
-        tree.root.render(root.matrices, consumer, 0x12345678, 0x23456789, 0xaabbccdd);
+        tree.root.render(
+                root.matrices,
+                consumer,
+                0x12345678,
+                0x23456789,
+                0xBB / 255.0F,
+                0xCC / 255.0F,
+                0xDD / 255.0F,
+                0xAA / 255.0F);
 
         float[] afterPosition = new float[16];
         float[] afterNormal = new float[9];
@@ -232,7 +241,7 @@ final class ModelPartVanillaPoseDifferentialTest {
         nodes.add(new ModelPartStructureSnapshot.Node(bone, parent, name, cuboids.size()));
         capture.beginNode(bone);
         for (ModelPart.Cuboid cuboid : cuboids) {
-            cuboid.renderCuboid(identity, consumer, 1, 2, 3);
+            cuboid.renderCuboid(identity, consumer, 1, 2, 1.0F, 1.0F, 1.0F, 1.0F);
             capture.endCuboid();
         }
         for (Map.Entry<String, ModelPart> child : tree.children.get(part).entrySet()) {
@@ -268,9 +277,6 @@ final class ModelPartVanillaPoseDifferentialTest {
                     value(mesh, vertex, ImmutableModelPartMesh.NORMAL_X),
                     value(mesh, vertex, ImmutableModelPartMesh.NORMAL_Y),
                     value(mesh, vertex, ImmutableModelPartMesh.NORMAL_Z)));
-            if (root.normalNeedsNormalization() || pose.normalNeedsNormalization(bone)) {
-                transformedNormal.normalize();
-            }
             result.add(new CapturedVertex(
                     transformedPosition.x,
                     transformedPosition.y,
@@ -441,8 +447,8 @@ final class ModelPartVanillaPoseDifferentialTest {
         }
 
         @Override
-        public VertexConsumer vertex(float x, float y, float z) {
-            capture.position(x, y, z);
+        public VertexConsumer vertex(double x, double y, double z) {
+            capture.position((float) x, (float) y, (float) z);
             return this;
         }
 
@@ -475,6 +481,19 @@ final class ModelPartVanillaPoseDifferentialTest {
             capture.normal(x, y, z);
             return this;
         }
+
+        @Override
+        public void next() {}
+
+        @Override
+        public void fixedColor(int red, int green, int blue, int alpha) {
+            throw new UnsupportedOperationException("Fixed colors are outside this differential test");
+        }
+
+        @Override
+        public void unfixColor() {
+            throw new UnsupportedOperationException("Fixed colors are outside this differential test");
+        }
     }
 
     private static final class ActualConsumer implements VertexConsumer {
@@ -486,10 +505,10 @@ final class ModelPartVanillaPoseDifferentialTest {
         private float v;
 
         @Override
-        public VertexConsumer vertex(float x, float y, float z) {
-            this.x = x;
-            this.y = y;
-            this.z = z;
+        public VertexConsumer vertex(double x, double y, double z) {
+            this.x = (float) x;
+            this.y = (float) y;
+            this.z = (float) z;
             return this;
         }
 
@@ -519,6 +538,19 @@ final class ModelPartVanillaPoseDifferentialTest {
         public VertexConsumer normal(float normalX, float normalY, float normalZ) {
             vertices.add(new CapturedVertex(x, y, z, u, v, normalX, normalY, normalZ));
             return this;
+        }
+
+        @Override
+        public void next() {}
+
+        @Override
+        public void fixedColor(int red, int green, int blue, int alpha) {
+            throw new UnsupportedOperationException("Fixed colors are outside this differential test");
+        }
+
+        @Override
+        public void unfixColor() {
+            throw new UnsupportedOperationException("Fixed colors are outside this differential test");
         }
     }
 

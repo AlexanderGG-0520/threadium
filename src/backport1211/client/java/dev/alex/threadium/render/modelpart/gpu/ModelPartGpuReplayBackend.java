@@ -7,20 +7,19 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import net.minecraft.client.gl.VertexBuffer;
 import net.minecraft.client.render.BufferBuilder;
-import net.minecraft.client.render.BuiltBuffer;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.Tessellator;
 import net.minecraft.client.render.VertexConsumerProvider;
 
 /**
- * Experimental render-thread-owned GPU backend for the first Minecraft 1.21.1 opaque replacement path.
+ * Experimental render-thread-owned GPU backend for the first Minecraft 1.20.1 opaque replacement path.
  *
- * <p>Prepared replays are grouped by the exact Vanilla provider and RenderLayer identity. The provider's private draw
- * boundary flushes the group into a Threadium-owned BufferBuilder, uploads it to a reusable dynamic VBO, and submits
- * it under the exact RenderLayer state.
+ * <p>Prepared replays are grouped by the exact Vanilla provider and RenderLayer identity. The provider's public layer
+ * draw boundary flushes the group into a Threadium-owned BufferBuilder, uploads it to a reusable dynamic VBO, and
+ * submits it under the exact RenderLayer state.
  */
 public final class ModelPartGpuReplayBackend implements AutoCloseable {
-    private static final boolean CONFIGURED = Boolean.getBoolean("threadium.backport1211.gpu");
+    private static final boolean CONFIGURED = Boolean.getBoolean("threadium.backport1201.gpu");
     private static final int BUFFER_CAPACITY = 4 * 1024 * 1024;
     private static final int MAXIMUM_QUEUED_REPLAYS = 4_096;
     private static final int MAXIMUM_QUEUED_VERTICES = 1_048_576;
@@ -85,7 +84,7 @@ public final class ModelPartGpuReplayBackend implements AutoCloseable {
     public void reset() {
         requireOpenRenderThread();
         clearQueued();
-        tessellator.clear();
+        tessellator.getBuffer().clear();
         if (vertexBuffer != null) {
             vertexBuffer.close();
             vertexBuffer = null;
@@ -105,17 +104,18 @@ public final class ModelPartGpuReplayBackend implements AutoCloseable {
     }
 
     private void drawBatch(RenderLayer layer, List<PreparedModelPartReplay> replays) {
-        BufferBuilder builder = tessellator.begin(layer.getDrawMode(), layer.getVertexFormat());
+        BufferBuilder builder = tessellator.getBuffer();
+        builder.begin(layer.getDrawMode(), layer.getVertexFormat());
         ThreadiumReplayVertexConsumer consumer = new ThreadiumReplayVertexConsumer(builder);
         int vertices = 0;
         for (PreparedModelPartReplay replay : replays) {
             consumer.replay(replay);
             vertices = Math.addExact(vertices, replay.vertexCount());
         }
-        BuiltBuffer built = builder.endNullable();
+        BufferBuilder.BuiltBuffer built = builder.endNullable();
         if (built == null) return;
         boolean layerStarted = false;
-        try (built) {
+        try {
             VertexBuffer buffer = vertexBuffer();
             layer.startDrawing();
             layerStarted = true;
@@ -131,6 +131,7 @@ public final class ModelPartGpuReplayBackend implements AutoCloseable {
             uploadedVertices = Math.addExact(uploadedVertices, vertices);
         } finally {
             if (layerStarted) layer.endDrawing();
+            built.release();
         }
     }
 

@@ -1,6 +1,5 @@
 package dev.alex.threadium.render.modelpart.pose;
 
-import dev.alex.threadium.mixin.accessor.MatrixStackEntryAccessor;
 import dev.alex.threadium.mixin.accessor.ModelPartAccessor;
 import dev.alex.threadium.render.modelpart.structure.ImmutableModelPartMesh;
 import java.util.List;
@@ -33,7 +32,7 @@ public final class ModelPartPoseInspector {
         float[] normal = new float[ImmutableRootRenderTransform.NORMAL_ELEMENTS];
         incomingEntry.getPositionMatrix().get(position);
         incomingEntry.getNormalMatrix().get(normal);
-        return ImmutableRootRenderTransform.fromFloats(position, normal, requiresNormalization(incomingEntry));
+        return ImmutableRootRenderTransform.fromFloats(position, normal, false);
     }
 
     public PoseObservation capturePose(ModelPart root, ImmutableModelPartMesh mesh) {
@@ -62,10 +61,6 @@ public final class ModelPartPoseInspector {
 
     public void clear() {
         cache.clear();
-    }
-
-    private static boolean requiresNormalization(MatrixStack.Entry entry) {
-        return !((MatrixStackEntryAccessor) (Object) entry).threadium$canSkipNormalization();
     }
 
     public record PoseObservation(ImmutableModelPartBonePose pose, boolean poseCacheHit) {}
@@ -115,8 +110,7 @@ public final class ModelPartPoseInspector {
             MatrixStack.Entry entry = matrices.peek();
             entry.getPositionMatrix().get(positionScratch);
             entry.getNormalMatrix().get(normalScratch);
-            capture.captureBone(
-                    boneIndex, positionScratch, normalScratch, treeVisible, drawVisible, requiresNormalization(entry));
+            capture.captureBone(boneIndex, positionScratch, normalScratch, treeVisible, drawVisible, false);
         }
 
         @Override

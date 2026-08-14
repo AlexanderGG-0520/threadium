@@ -13,7 +13,7 @@ import net.minecraft.util.Identifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Minecraft 1.21.1 bootstrap with an opt-in, fail-closed cached ModelPart replacement path. */
+/** Minecraft 1.20.1 bootstrap with an opt-in, fail-closed cached ModelPart replacement path. */
 public final class ThreadiumClient implements ClientModInitializer {
     public static final String MOD_ID = "threadium";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
@@ -31,7 +31,7 @@ public final class ThreadiumClient implements ClientModInitializer {
         ResourceManagerHelper.get(ResourceType.CLIENT_RESOURCES)
                 .registerReloadListener(new BackportResourceReloadListener());
         LOGGER.info(
-                "Threadium 1.21.1 backport initialized; experimental cached replacement is {}",
+                "Threadium 1.20.1 backport initialized; experimental cached replacement is {}",
                 ModelPartReplacementService.configured() ? "enabled" : "disabled");
     }
 
@@ -41,7 +41,7 @@ public final class ThreadiumClient implements ClientModInitializer {
     }
 
     private static final class BackportResourceReloadListener implements SimpleSynchronousResourceReloadListener {
-        private static final Identifier ID = Identifier.of(MOD_ID, "backport-resource-generation");
+        private static final Identifier ID = new Identifier(MOD_ID, "backport-resource-generation");
 
         @Override
         public Identifier getFabricId() {

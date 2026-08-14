@@ -24,7 +24,7 @@ import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.util.math.MatrixStack;
 
 /**
- * First fail-closed Minecraft 1.21.1 replacement path.
+ * First fail-closed Minecraft 1.20.1 replacement path.
  *
  * <p>It replaces only exact {@code entity_cutout_no_cull} draws that resolve directly from a trusted provider to the
  * exact Vanilla BufferBuilder. Geometry is completely transformed and validated before either the destination
@@ -32,7 +32,7 @@ import net.minecraft.client.util.math.MatrixStack;
  * real-machine visual validation is complete.
  */
 public final class ModelPartReplacementService {
-    private static final boolean CONFIGURED = Boolean.getBoolean("threadium.backport1211.replacement");
+    private static final boolean CONFIGURED = Boolean.getBoolean("threadium.backport1201.replacement");
     private static volatile ModelPartReplacementService instance;
 
     private final ModelPartStructureInspector structureInspector = new ModelPartStructureInspector();
@@ -216,7 +216,7 @@ public final class ModelPartReplacementService {
         replacementAccepts.incrementAndGet();
         if (!replacementLogged) {
             replacementLogged = true;
-            ThreadiumClient.LOGGER.info("Threadium replaced a Minecraft 1.21.1 ModelPart draw through {}", path);
+            ThreadiumClient.LOGGER.info("Threadium replaced a Minecraft 1.20.1 ModelPart draw through {}", path);
         }
         return true;
     }
@@ -242,7 +242,7 @@ public final class ModelPartReplacementService {
         if (failureLogged) return;
         failureLogged = true;
         ThreadiumClient.LOGGER.warn(
-                "Threadium disabled the experimental Minecraft 1.21.1 replacement path after {} failed; unsupported draws remain Vanilla",
+                "Threadium disabled the experimental Minecraft 1.20.1 replacement path after {} failed; unsupported draws remain Vanilla",
                 stage,
                 exception);
     }
